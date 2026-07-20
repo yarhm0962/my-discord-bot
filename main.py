@@ -2,7 +2,6 @@ from flask import Flask
 from threading import Thread
 import os
 import re
-import base64
 import aiohttp
 import asyncio
 import discord
@@ -27,16 +26,17 @@ WARNINGS = {}
 TIMEOUT_DURATION = 300
 LOADSTRING_SCHEDULES = {}
 
-DAY_NAMES = {"0":"Sunday","1":"Monday","2":"Tuesday","3":"Wednesday","4":"Thursday","5":"Friday","6":"Saturday"}
-
 async def upload_to_pastefy(content):
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-        async with s.post("https://pastefy.app/api/pastes", data=content) as r:
-            if r.status==200 or r.status==201:
-                data=await r.json()
-                paste_id=data.get("id")
-                if paste_id:
-                    return f"https://pastefy.app/{paste_id}/raw"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+            async with s.post("https://pastefy.app/api/pastes", data=content) as r:
+                if r.status in (200, 201):
+                    data = await r.json()
+                    paste_id = data.get("id")
+                    if paste_id:
+                        return f"https://pastefy.app/{paste_id}/raw"
+    except:
+        pass
     return None
 
 def generate_wrapped_lua(user_url):
@@ -66,11 +66,24 @@ def get_color(color_str):
     return col
 
 def extract_url(text):
-    pats=[r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',r'http\.get\s*\(\s*["\']([^"\']+)["\']',r'loadstring\s*\(\s*game:HttpGet\s*\(\s*["\']([^"\']+)["\']',r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',r'["\'](https?://[^"\']+)["\']']
-    for p in pats:
-        m=re.search(p,text)
-        if m: return None if "pastefy.app" in m.group(1) else m.group(1)
-    return text.strip() if text.strip().startswith(('http://','https://')) and "pastefy.app" not in text else None
+    text = text.strip()
+    if text.startswith(('http://','https://')):
+        if not any(x in text for x in ['pastefy.app','api-pastes.github.io']):
+            return text.split()[0]
+    patterns = [
+        r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
+        r'http\.get\s*\(\s*["\']([^"\']+)["\']',
+        r'loadstring\s*\(\s*game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
+        r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',
+        r'["\'](https?://[^"\']+)["\']'
+    ]
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            url = m.group(1)
+            if 'pastefy.app' not in url and 'api-pastes.github.io' not in url:
+                return url
+    return None
 
 def smart_decode(code):
     if not code or len(code)<5: return code or ""
@@ -135,31 +148,30 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (PASTEFY)")
-@app_commands.describe(script_name="Name of your script",your_loadstring="Your full loadstring or raw URL")
+@app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL or full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_loadstring:str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Permission required: Administrator",ephemeral=True)
     await interaction.response.defer()
-    user_url=extract_url(your_loadstring)
+    user_url = extract_url(your_loadstring)
     if not user_url:
         if your_loadstring.strip().startswith(('http://','https://')):
-            user_url=your_loadstring.strip()
+            user_url = your_loadstring.strip()
         else:
-            return await interaction.followup.send("No valid URL found",ephemeral=True)
-    lua_code=generate_wrapped_lua(user_url)
-    pastefy_url=await upload_to_pastefy(lua_code)
+            return await interaction.followup.send("❌ No valid URL found.\n\n✅ Enter like:\n`https://pastefy.app/xxx/raw`\nOR full loadstring",ephemeral=True)
+    lua_code = generate_wrapped_lua(user_url)
+    pastefy_url = await upload_to_pastefy(lua_code)
     if not pastefy_url:
-        return await interaction.followup.send("Error: Failed to upload to Pastefy. Try again.",ephemeral=True)
-    wrapped_ls=f'loadstring(game:HttpGet("{pastefy_url}"))()'
-    script_id=f"{script_name.replace(' ','_')}_SUNDAY"
-    LOADSTRING_SCHEDULES[script_id]={"name":script_name,"user_url":user_url,"pastefy_url":pastefy_url,"active_day":"0"}
-    embed=discord.Embed(title=f"{script_name}",color=discord.Colour.teal())
-    embed.add_field(name="Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="Protection",value="PASTEFY HOSTED\nBlocked Mon-Sat\nAuto-reactivates every Sunday",inline=False)
-    embed.add_field(name="Pastefy URL",value=f"||{pastefy_url}||",inline=False)
-    embed.add_field(name="Original URL",value=f"||{user_url}||",inline=False)
-    embed.description=f"✅ COPY THIS LOADSTRING:\n```{wrapped_ls}```"
-    embed.set_footer(text="🔒 LOCKED TO SUNDAYS — Hosted on Pastefy (Roblox-Friendly)")
+        return await interaction.followup.send("❌ Failed to upload to Pastefy. Try again later.",ephemeral=True)
+    wrapped_ls = f'loadstring(game:HttpGet("{pastefy_url}"))()'
+    script_id = f"{script_name.replace(' ','_')}_SUNDAY"
+    LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"pastefy_url":pastefy_url}
+    embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
+    embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
+    embed.add_field(name="📦 Pastefy URL",value=f"||{pastefy_url}||",inline=False)
+    embed.add_field(name="🔗 Original URL",value=f"||{user_url}||",inline=False)
+    embed.description = f"**📋 COPY THIS LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
+    embed.set_footer(text="Runs ONLY on Sundays. Blocked Mon-Sat")
     await interaction.followup.send(embed=embed)
 
 @bot.command(name='cmds')
@@ -177,7 +189,7 @@ async def deobf_prefix(ctx,*,link:str):
     if ctx.author.bot:return
     m=await ctx.send("Processing...")
     u=extract_url(link)
-    if not u:return await m.edit(content="No valid URL")
+    if not u:return await m.edit(content="No valid URL found")
     c,e=await deobfuscate_from_url(u)
     if e:return await m.edit(content=f"Error: {e}")
     fn=f"deobf_{ctx.message.id}.lua"
