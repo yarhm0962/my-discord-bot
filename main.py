@@ -1,10 +1,7 @@
 from flask import Flask
-from flask import request
 from threading import Thread
 import os
 import re
-import uuid
-import base64
 import aiohttp
 import asyncio
 import discord
@@ -13,18 +10,6 @@ from discord import app_commands, File
 from discord.ext import commands
 
 app = Flask(__name__)
-STORED_SCRIPTS = {}
-
-# ✅ YOUR RAW ENDPOINT — PUBLICLY ACCESSIBLE!
-@app.route('/')
-def home():
-    return "✅ Bot Online — Raw Service Active"
-
-@app.route('/raw/<script_id>')
-def serve_raw(script_id):
-    if script_id in STORED_SCRIPTS:
-        return STORED_SCRIPTS[script_id], 200, {"Content-Type": "text/plain; charset=utf-8"}
-    return "❌ Script Not Found", 404
 
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
@@ -39,20 +24,23 @@ TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
-LOADSTRING_SCHEDULES = {}
 
-# ✅ AUTO-DETECTS YOUR DOMAIN — NO VARIABLE NEEDED!
-def get_bot_domain():
-    # Replit auto-domain
-    replit_domain = os.getenv("REPLIT_DOMAIN", "").strip()
-    if replit_domain:
-        return f"https://{replit_domain}"
-    # Manual domain variable
-    env_domain = os.getenv("DOMAIN", "").strip()
-    if env_domain and env_domain != "":
-        return env_domain.rstrip('/')
-    # Fallback — tell user to open webview
-    return "⚠️OPEN BOT WEBVIEW FIRST AND RESTART"
+async def upload_to_pastes_dev(content):
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.post(
+                "https://api.pastes.dev/post",
+                data=content,
+                headers={"Content-Type": "text/plain"}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    key = data.get("key")
+                    if key:
+                        return f"https://api.pastes.dev/{key}"
+    except Exception as e:
+        print(f"Upload Error: {e}")
+    return None
 
 def generate_wrapped_lua(user_url):
     return f'''local D=os.date("%w")
@@ -63,22 +51,6 @@ end)
 return
 end
 loadstring(game:HttpGet("{user_url}"))()'''
-
-def parse_time(time_str):
-    if not time_str: return None
-    m = re.match(r'(\d+)([mhd])', time_str.lower().strip())
-    if not m: return None
-    a,u=int(m.group(1)),m.group(2)
-    return a*60 if u=='m' else a*3600 if u=='h' else a*86400
-
-def get_color(color_str):
-    c=color_str.lower().strip()
-    m={"red":discord.Colour.red(),"green":discord.Colour.green(),"blue":discord.Colour.blue(),"gold":discord.Colour.gold(),"yellow":discord.Colour.yellow(),"orange":discord.Colour.orange(),"purple":discord.Colour.purple(),"pink":discord.Colour.magenta(),"cyan":discord.Colour.teal()}
-    col=m.get(c,discord.Colour.green())
-    if c.startswith("#"):
-        try: col=discord.Colour(int(c.lstrip("#"),16))
-        except:pass
-    return col
 
 def extract_url(text):
     text = text.strip()
@@ -100,7 +72,7 @@ def smart_decode(code):
             try:
                 b64=match.group(1)
                 b64+='='*(4-len(b64)%4)if len(b64)%4!=0 else ''
-                d=base64.b64decode(b64).decode('utf-8',errors='ignore')
+                d=__import__('base64').b64decode(b64).decode('utf-8',errors='ignore')
                 return smart_decode(d)if len(d)>10 and not d.startswith('--')else code
             except:pass
     m=re.search(r'string\.reverse\s*\(\s*["\']([^"\']+)["\']',code)
@@ -110,7 +82,7 @@ def smart_decode(code):
             try:
                 b64=rev
                 b64+='='*(4-len(b64)%4)if len(b64)%4!=0 else ''
-                d=base64.b64decode(b64).decode('utf-8',errors='ignore')
+                d=__import__('base64').b64decode(b64).decode('utf-8',errors='ignore')
                 return smart_decode(d)if len(d)>10 else smart_decode(rev)
             except:return smart_decode(rev)if len(rev)>10 else code
     lines=[l for l in code.split('\n')if len(l.strip())>10 or l.strip()]
@@ -127,6 +99,22 @@ async def deobfuscate_from_url(url):
                 return (smart_decode(c),None)if c and len(c)>4 else (None,"Empty response")
     except Exception as e: return None,f"Fetch Error: {str(e)[:80]}"
 
+def parse_time(time_str):
+    if not time_str: return None
+    m = re.match(r'(\d+)([mhd])', time_str.lower().strip())
+    if not m: return None
+    a,u=int(m.group(1)),m.group(2)
+    return a*60 if u=='m' else a*3600 if u=='h' else a*86400
+
+def get_color(color_str):
+    c=color_str.lower().strip()
+    m={"red":discord.Colour.red(),"green":discord.Colour.green(),"blue":discord.Colour.blue(),"gold":discord.Colour.gold(),"yellow":discord.Colour.yellow(),"orange":discord.Colour.orange(),"purple":discord.Colour.purple(),"pink":discord.Colour.magenta(),"cyan":discord.Colour.teal()}
+    col=m.get(c,discord.Colour.green())
+    if c.startswith("#"):
+        try: col=discord.Colour(int(c.lstrip("#"),16))
+        except:pass
+    return col
+
 def clean_expired_warnings(gid, uid):
     if gid not in WARNINGS or uid not in WARNINGS[gid]: return
     data = WARNINGS[gid][uid]
@@ -140,22 +128,17 @@ async def on_message(message):
     if message.author.bot or not message.guild: return await bot.process_commands(message)
     highest_role = max(message.guild.roles, key=lambda r: r.position)
     mentioned_highest = (highest_role in message.role_mentions) or any(highest_role in u.roles for u in message.mentions)
-    
     if mentioned_highest:
         gid = str(message.guild.id)
         uid = str(message.author.id)
-        
         if gid not in WARNINGS: WARNINGS[gid] = {}
         clean_expired_warnings(gid, uid)
-        
         if uid not in WARNINGS[gid]:
             WARNINGS[gid][uid] = {"count": 1, "time": datetime.utcnow()}
         else:
             WARNINGS[gid][uid]["count"] += 1
             WARNINGS[gid][uid]["time"] = datetime.utcnow()
-        
         count = WARNINGS[gid][uid]["count"]
-        
         if count == 1:
             e = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
             e.description = f"{message.author.mention}, please do not mention the highest role.\n⚠️ Warnings auto-reset after {WARNING_EXPIRE_MINUTES} minutes."
@@ -170,37 +153,30 @@ async def on_message(message):
                 await message.author.timeout(until, reason="Mentioned highest role repeatedly")
             except: pass
             e = discord.Embed(title="🔒 Warning 3/3 — Timed Out!", color=discord.Colour.red())
-            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ **Warnings RESET TO 0 after timeout!**"
+            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ Warnings RESET TO 0 after timeout!"
             await message.channel.send(embed=e)
             del WARNINGS[gid][uid]
-    
     await bot.process_commands(message)
 
-@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring")
+@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (Mirage API)")
 @app_commands.describe(script_name="Name of your script",your_url="Script URL or full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_url:str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Permission required: Administrator",ephemeral=True)
-    
     user_url = extract_url(your_url)
     if not user_url:
         return await interaction.response.send_message("❌ No URL found. Enter direct URL like `https://...`",ephemeral=True)
-    
     lua_code = generate_wrapped_lua(user_url)
-    script_id = uuid.uuid4().hex[:12]
-    STORED_SCRIPTS[script_id] = lua_code
-    
-    domain = get_bot_domain()
-    raw_url = f"{domain}/raw/{script_id}"
-    wrapped_ls = f'loadstring(game:HttpGet("{raw_url}"))()'
-    
+    pastes_url = await upload_to_pastes_dev(lua_code)
+    if not pastes_url:
+        return await interaction.response.send_message("❌ Upload failed. Try again.",ephemeral=True)
+    final_loadstring = f'loadstring(game:HttpGet("{pastes_url}"))()'
     embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
     embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="📦 YOUR RAW LINK",value=f"`{raw_url}`",inline=False)
-    embed.add_field(name="🔗 ORIGINAL URL",value=f"`{user_url}`",inline=False)
-    embed.add_field(name="📋 FULL LOADSTRING",value=f"```lua\n{wrapped_ls}\n```",inline=False)
-    embed.set_footer(text="✅ Click link to test! Open bot webview first if domain shows ⚠️")
-    
+    embed.add_field(name="📦 GENERATED LINK",value=f"`{pastes_url}`",inline=False)
+    embed.add_field(name="🔗 Original URL",value=f"`{user_url}`",inline=False)
+    embed.add_field(name="📋 FULL LOADSTRING",value=f"```lua\n{final_loadstring}\n```",inline=False)
+    embed.set_footer(text="✅ Powered by Mirage Loadstring Generator")
     await interaction.response.send_message(embed=embed)
 
 @bot.command(name='cmds')
@@ -376,7 +352,7 @@ async def unmute_user_cmd(interaction:discord.Interaction,user:discord.Member):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user} — Mirage API Active")
     try:await tree.sync()
     except Exception as e:print(f"Sync Error: {e}")
 
