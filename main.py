@@ -38,18 +38,24 @@ def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
 async def create_paste(code):
-    url = "https://rentry.co/api/new"
-    suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    payload = {"text": code, "url": suffix, "edit_code": suffix, "json": "1"}
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.post(url, data=payload) as resp:
-                if resp.status == 200:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.post(
+                "https://api.paste.gg/v1/pastes",
+                json={
+                    "name": "script.lua",
+                    "visibility": "unlisted",
+                    "files": [{"name": "script.lua", "content": code}]
+                },
+                timeout=20
+            ) as resp:
+                if resp.status in [200, 201]:
                     data = await resp.json()
-                    if data.get("status") == "ok":
-                        return f"https://rentry.co/raw/{suffix}"
-    except:
-        return None
+                    paste_id = data["result"]["id"]
+                    file_id = data["result"]["files"][0]["id"]
+                    return f"https://api.pastes.io/{paste_id}/{file_id}"
+    except Exception as e:
+        print(f"Paste Error: {e}")
     return None
 
 class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
@@ -62,7 +68,8 @@ class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
             USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
             embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
             embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
-            embed.set_footer(text="Reopen /panel to see your access")
+            embed.add_field(name="🔑 YOUR KEY", value=f"`{key}`", inline=False)
+            embed.set_footer(text="Reopen /panel to get your loadstring")
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
@@ -90,39 +97,42 @@ async def genkey(interaction: discord.Interaction, count: int=1):
     embed.add_field(name="Format", value="`KEY-XXX-XXXX-XXX`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@tree.command(name="panel", description="Open Panel OR Add Script: /panel script_name: code: file:")
+@tree.command(name="panel", description="Open Panel OR Add Script: /panel script_name: file: OR code:")
 @app_commands.describe(
-    script_name="Script name (leave empty to just open panel)",
-    code="Paste Lua code here",
-    file="Upload your .lua file here"
+    script_name="REQUIRED: Name of your script",
+    code="Paste your Lua code (OR upload file)",
+    file="Upload your .lua file (OR paste code)"
 )
 async def panel(interaction: discord.Interaction, script_name: str="", code: str="", file: discord.Attachment=None):
     user_id = interaction.user.id
 
     # === ADD SCRIPT MODE ===
-    if script_name and (code or file):
+    if script_name:
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        
+        if not file and not code.strip():
+            return await interaction.response.send_message("❌ **REQUIRED:** Provide either a `.lua file` OR paste your `code`!\n\nUsage:\n`/panel script_name:MyScript file:📄script.lua`\n`/panel script_name:MyScript code:print('hi')`", ephemeral=True)
+
         await interaction.response.defer(ephemeral=True)
 
         if file:
             try:
                 script_code = (await file.read()).decode('utf-8')
             except:
-                return await interaction.followup.send("❌ Failed to read file! Use valid .lua file.", ephemeral=True)
+                return await interaction.followup.send("❌ Failed to read file! Upload a valid `.lua` file.", ephemeral=True)
         else:
-            script_code = code
+            script_code = code.strip()
 
         paste_url = await create_paste(script_code)
         if not paste_url:
-            return await interaction.followup.send("❌ Failed to create link! Try again.", ephemeral=True)
+            return await interaction.followup.send("❌ Failed to create link! Please try again later.", ephemeral=True)
 
         SCRIPTS[script_name] = paste_url
         embed = Embed(title="✅ SCRIPT ADDED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="📜 Script Name", value=script_name, inline=False)
         embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
-        embed.add_field(name="📋 Loadstring", value=f"```lua\nloadstring(game:HttpGet(\"{paste_url}\"))()\n```", inline=False)
-        embed.set_footer(text="✅ Use /panel to get loadstring anytime")
+        embed.set_footer(text="✅ Users get loadstring with their key auto-included!")
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
     # === OPEN PANEL MODE ===
@@ -133,7 +143,9 @@ async def panel(interaction: discord.Interaction, script_name: str="", code: str
         color=Colour.green() if verified else Colour.red()
     )
     if verified:
+        user_key = USER_DATA[user_id]["key"]
         embed.add_field(name="🔑 Status", value="✅ Verified — Full Access Granted", inline=False)
+        embed.add_field(name="🔑 YOUR KEY", value=f"`{user_key}`", inline=False)
         embed.add_field(name="📜 Scripts Available", value=f"{len(SCRIPTS)} script(s)", inline=False)
     else:
         embed.add_field(name="🔒 Access Restricted", value="Click [🔑 Redeem Key] below to unlock.", inline=False)
@@ -148,6 +160,7 @@ async def redeem(interaction: discord.Interaction, key: str):
         USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
         embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
+        embed.add_field(name="🔑 YOUR KEY", value=f"`{key}`", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
@@ -180,11 +193,15 @@ class PanelButtons(ui.View):
         if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Redeem key first!", ephemeral=True)
         if not SCRIPTS:
-            return await interaction.response.send_message("❌ No scripts yet. Admin use /panel script_name: file:", ephemeral=True)
+            return await interaction.response.send_message("❌ No scripts yet. Admin use:\n`/panel script_name:MyScript file:script.lua`", ephemeral=True)
+        
+        user_key = USER_DATA[interaction.user.id]["key"]
         output = "📋 **YOUR WORKING LOADSTRING:**\n```lua\n"
         for name, url in SCRIPTS.items():
-            output += f'-- {name}\nloadstring(game:HttpGet("{url}"))()\n\n'
-        output += "```\n✅ **COPY & EXECUTE IN ROBLOX!**"
+            output += f'-- {name}\n'
+            output += f'getgenv().SCRIPT_KEY = "{user_key}"\n'
+            output += f'loadstring(game:HttpGet("{url}"))()\n\n'
+        output += "```\n✅ **COPY & EXECUTE DIRECTLY IN ROBLOX! KEY AUTO-INSERTED!**"
         await interaction.response.send_message(output, ephemeral=True)
 
     @ui.button(label="🔄 Reset HWID", style=ButtonStyle.secondary)
