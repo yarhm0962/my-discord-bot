@@ -68,21 +68,10 @@ def get_color(color_str):
 def extract_url(text):
     text = text.strip()
     if text.startswith(('http://','https://')):
-        if not any(x in text for x in ['pastefy.app','api-pastes.github.io']):
-            return text.split()[0]
-    patterns = [
-        r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
-        r'http\.get\s*\(\s*["\']([^"\']+)["\']',
-        r'loadstring\s*\(\s*game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
-        r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',
-        r'["\'](https?://[^"\']+)["\']'
-    ]
-    for p in patterns:
-        m = re.search(p, text)
-        if m:
-            url = m.group(1)
-            if 'pastefy.app' not in url and 'api-pastes.github.io' not in url:
-                return url
+        return text.split()[0]
+    match = re.search(r'["\'](https?://[^"\']+)["\']', text)
+    if match:
+        return match.group(1)
     return None
 
 def smart_decode(code):
@@ -148,21 +137,18 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (PASTEFY)")
-@app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL or full loadstring")
+@app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL OR full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_loadstring:str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Permission required: Administrator",ephemeral=True)
     await interaction.response.defer()
     user_url = extract_url(your_loadstring)
     if not user_url:
-        if your_loadstring.strip().startswith(('http://','https://')):
-            user_url = your_loadstring.strip()
-        else:
-            return await interaction.followup.send("❌ No valid URL found.\n\n✅ Enter like:\n`https://pastefy.app/xxx/raw`\nOR full loadstring",ephemeral=True)
+        return await interaction.followup.send("❌ Invalid input. Enter direct URL like `https://...` OR full loadstring",ephemeral=True)
     lua_code = generate_wrapped_lua(user_url)
     pastefy_url = await upload_to_pastefy(lua_code)
     if not pastefy_url:
-        return await interaction.followup.send("❌ Failed to upload to Pastefy. Try again later.",ephemeral=True)
+        return await interaction.followup.send("❌ Failed to upload to Pastefy. Try again.",ephemeral=True)
     wrapped_ls = f'loadstring(game:HttpGet("{pastefy_url}"))()'
     script_id = f"{script_name.replace(' ','_')}_SUNDAY"
     LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"pastefy_url":pastefy_url}
