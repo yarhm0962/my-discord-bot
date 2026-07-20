@@ -6,7 +6,7 @@ import random
 import string
 import discord
 import aiohttp
-from discord import app_commands, ui, ButtonStyle, Embed, Colour
+from discord import app_commands, ui, ButtonStyle, Embed, Colour, File
 from discord.ext import commands
 
 app = Flask('')
@@ -79,24 +79,6 @@ class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
             embed.description = "The key you entered is not recognized. Please check your key and try again."
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class AddScriptModal(ui.Modal, title="➕ Add New Script"):
-    name_input = ui.TextInput(label="Script Name", placeholder="e.g. MyScript", required=True)
-    code_input = ui.TextInput(label="Paste Your Lua Code", placeholder="Paste your full script code here...", required=True, style=discord.TextStyle.long)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        name = str(self.name_input).strip()
-        code = str(self.code_input).strip()
-        await interaction.response.defer(ephemeral=True)
-        paste_url = await create_paste(code)
-        if not paste_url:
-            return await interaction.followup.send("❌ Failed to create paste link! Try again.", ephemeral=True)
-        SCRIPTS[name] = paste_url
-        embed = Embed(title="✅ SCRIPT UPLOADED!", color=Colour.green())
-        embed.add_field(name="Script Name", value=name, inline=False)
-        embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
-        embed.set_footer(text="Users get auto loadstring from panel!")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
 @bot.event
 async def on_ready():
     print(f'✅ Logged in as {bot.user}')
@@ -122,6 +104,36 @@ async def genkey(interaction: discord.Interaction, count: int=1):
     embed.add_field(name="Format", value="`KEY-XXX-XXXX-XXX`", inline=False)
     embed.set_footer(text="Click 🔑 Redeem Key on panel to activate")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="add_script", description="Add new script (Admin only)")
+async def add_script(interaction: discord.Interaction, name: str, file: discord.Attachment=None, code: str=""):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    if file:
+        try:
+            content = await file.read()
+            script_code = content.decode('utf-8')
+        except:
+            return await interaction.followup.send("❌ Failed to read file! Upload a valid .lua file.", ephemeral=True)
+    elif code:
+        script_code = code
+    else:
+        return await interaction.followup.send("❌ Provide either a file OR code!", ephemeral=True)
+    
+    paste_url = await create_paste(script_code)
+    if not paste_url:
+        return await interaction.followup.send("❌ Failed to create link! Try again.", ephemeral=True)
+    
+    SCRIPTS[name] = paste_url
+    embed = Embed(title="✅ SCRIPT ADDED!", color=Colour.green())
+    embed.add_field(name="Script Name", value=name, inline=False)
+    embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
+    embed.add_field(name="📄 Source", value=f"File: {file.filename}" if file else "Code Text", inline=False)
+    embed.set_footer(text="Users get loadstring from /panel")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 @tree.command(name="panel", description="Open Control Panel")
 async def panel(interaction: discord.Interaction):
@@ -177,18 +189,12 @@ class PanelButtons(ui.View):
             return await interaction.response.send_message("✅ Already verified! Reopen /panel to see your access.", ephemeral=True)
         await interaction.response.send_modal(RedeemModal())
 
-    @ui.button(label="➕ Add Script", style=ButtonStyle.blurple)
-    async def add_script_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-        await interaction.response.send_modal(AddScriptModal())
-
     @ui.button(label="📜 Get Loadstring", style=ButtonStyle.success)
     async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
         if not SCRIPTS:
-            return await interaction.response.send_message("❌ No scripts available yet. Ask an admin to add one.", ephemeral=True)
+            return await interaction.response.send_message("❌ No scripts available yet. Admin use /add_script", ephemeral=True)
         output = "📋 **YOUR WORKING LOADSTRING:**\n```lua\n"
         for name, url in SCRIPTS.items():
             output += f'-- {name}\nloadstring(game:HttpGet("{url}"))()\n\n'
