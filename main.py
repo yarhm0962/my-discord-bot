@@ -24,6 +24,22 @@ tree = bot.tree
 TICKET_SETTINGS = {}
 TICKET_COUNT = {}
 
+def parse_time(time_str):
+    if not time_str:
+        return None
+    match = re.match(r'(\d+)([mhd])', time_str.lower().strip())
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if unit == 'm':
+        return amount * 60
+    elif unit == 'h':
+        return amount * 3600
+    elif unit == 'd':
+        return amount * 86400
+    return None
+
 def extract_url(text):
     patterns = [
         r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
@@ -136,7 +152,7 @@ async def show_commands(ctx):
 /ban user:@User reason: - Ban a user
 /unban user_id:123456789 - Unban a user by ID
 /kick user:@User reason: - Kick a user
-/mute user:@User reason: - Mute a user
+/mute user:@User time:1h reason: - Mute a user with duration
 /unmute user:@User - Unmute a user
 """
     await ctx.author.send(commands_list.strip())
@@ -323,24 +339,40 @@ async def kick_user(interaction: discord.Interaction, user: discord.Member, reas
     await interaction.response.send_message(f"Success: Kicked {user.mention} | Reason: {kick_reason}")
 
 @tree.command(name="mute", description="Mute a user")
-@app_commands.describe(user="Required: User to mute", reason="Optional: Reason for the mute")
-async def mute_user(interaction: discord.Interaction, user: discord.Member, reason: str = ""):
+@app_commands.describe(
+    user="Required: User to mute",
+    time="Optional: Put any time like 1m, 1h, 1d, eg.",
+    reason="Optional: Reason for the mute"
+)
+async def mute_user(interaction: discord.Interaction, user: discord.Member, time: str = "", reason: str = ""):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("Error: Missing permission - Manage Roles", ephemeral=True)
     if user.top_role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
         return await interaction.response.send_message("Error: Cannot mute user with higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot mute yourself", ephemeral=True)
+    
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if not mute_role:
         mute_role = await interaction.guild.create_role(name="Muted")
         for channel in interaction.guild.channels:
             await channel.set_permissions(mute_role, send_messages=False, speak=False)
+    
     if mute_role in user.roles:
         return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
+    
     mute_reason = reason if reason else "No reason provided"
+    duration = parse_time(time)
+    
     await user.add_roles(mute_role, reason=mute_reason)
-    await interaction.response.send_message(f"Success: Muted {user.mention} | Reason: {mute_reason}")
+    
+    if duration:
+        await interaction.response.send_message(f"Success: Muted {user.mention} for {time} | Reason: {mute_reason}")
+        await asyncio.sleep(duration)
+        if mute_role in user.roles:
+            await user.remove_roles(mute_role, reason="Mute duration expired")
+    else:
+        await interaction.response.send_message(f"Success: Muted {user.mention} permanently | Reason: {mute_reason}")
 
 @tree.command(name="unmute", description="Unmute a user")
 @app_commands.describe(user="Required: User to unmute")
