@@ -2,6 +2,8 @@ from flask import Flask
 from threading import Thread
 import os
 import re
+import random
+import string
 import aiohttp
 import asyncio
 import discord
@@ -24,21 +26,32 @@ TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
+ACTIVE_KEYS = {}
+ADMIN_ROLE_NAME = "Admin"
+
+def generate_unique_key():
+    part1 = ''.join(random.choices(string.ascii_uppercase, k=4))
+    part2 = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    part3 = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    part4 = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    return f"MIRAGE-{part2}-{part3}-{part4}"
+
+def is_admin(user):
+    if user.guild_permissions.administrator: return True
+    return any(role.name == ADMIN_ROLE_NAME for role in user.roles)
+
+def clean_key_input(key):
+    return string.upper(re.sub(r'\s+', '', key.strip()))
 
 async def upload_to_pastes_dev(content):
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            async with session.post(
-                "https://api.pastes.dev/post",
-                data=content
-            ) as resp:
+            async with session.post("https://api.pastes.dev/post", data=content) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     key = data.get("key")
-                    if key:
-                        return f"https://api.pastes.dev/{key}"
-    except Exception as e:
-        print(f"Upload Error: {e}")
+                    if key: return f"https://api.pastes.dev/{key}"
+    except Exception as e: print(f"Upload Error: {e}")
     return None
 
 def generate_wrapped_lua(user_url):
@@ -53,11 +66,9 @@ loadstring(game:HttpGet("{user_url}"))()'''
 
 def extract_url(text):
     text = text.strip()
-    if text.startswith(('http://','https://')):
-        return text.split()[0]
+    if text.startswith(('http://','https://')): return text.split()[0]
     match = re.search(r'["\'](https?://[^"\']+)["\']', text)
-    if match:
-        return match.group(1)
+    if match: return match.group(1)
     return None
 
 def smart_decode(code):
@@ -152,10 +163,80 @@ async def on_message(message):
                 await message.author.timeout(until, reason="Mentioned highest role repeatedly")
             except: pass
             e = discord.Embed(title="🔒 Warning 3/3 — Timed Out!", color=discord.Colour.red())
-            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ Warnings RESET TO 0 after timeout!"
+            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ Warnings reset!"
             await message.channel.send(embed=e)
             del WARNINGS[gid][uid]
     await bot.process_commands(message)
+
+@tree.command(name="gen-key",description="Generate new key (Admin only)")
+@app_commands.describe(days="Days until expiry — leave empty for permanent")
+async def gen_key_cmd(interaction: discord.Interaction, days: int = 0):
+    if not is_admin(interaction.user):
+        return await interaction.response.send_message("❌ Admin only", ephemeral=True)
+    new_key = generate_unique_key()
+    if days > 0:
+        expiry = datetime.utcnow() + timedelta(days=days)
+        ACTIVE_KEYS[new_key] = expiry
+        msg = f"✅ **NEW KEY GENERATED**\n\n`{new_key}`\n⏰ Expires: {expiry.strftime('%Y-%m-%d %H:%M UTC')}"
+    else:
+        ACTIVE_KEYS[new_key] = None
+        msg = f"✅ **NEW KEY GENERATED**\n\n`{new_key}`\n♾️ Permanent Key"
+    embed = discord.Embed(title="🔑 Key Generated", color=discord.Colour.green())
+    embed.description = msg
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="validate-key",description="Check if your key is valid")
+@app_commands.describe(key="Your key to check")
+async def validate_key_cmd(interaction: discord.Interaction, key: str):
+    key = clean_key_input(key)
+    if key in ACTIVE_KEYS:
+        expiry = ACTIVE_KEYS[key]
+        if expiry is None:
+            embed = discord.Embed(title="✅ KEY VALID", color=discord.Colour.green())
+            embed.add_field(name="Status", value="✅ ACTIVE — Permanent", inline=False)
+        else:
+            remaining = expiry - datetime.utcnow()
+            if remaining.total_seconds() > 0:
+                days = remaining.days
+                hours = remaining.seconds // 3600
+                embed = discord.Embed(title="✅ KEY VALID", color=discord.Colour.green())
+                embed.add_field(name="Status", value="✅ ACTIVE", inline=False)
+                embed.add_field(name="Time Remaining", value=f"📅 {days}d {hours}h", inline=False)
+            else:
+                del ACTIVE_KEYS[key]
+                embed = discord.Embed(title="⏰ KEY EXPIRED", color=discord.Colour.orange())
+                embed.description = "This key has expired — contact admin"
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        embed = discord.Embed(title="❌ INVALID KEY", color=discord.Colour.red())
+        embed.description = "Key not found — check your key or ask admin"
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="revoke-key",description="Revoke/delete a key (Admin only)")
+@app_commands.describe(key="Key to revoke")
+async def revoke_key_cmd(interaction: discord.Interaction, key: str):
+    if not is_admin(interaction.user):
+        return await interaction.response.send_message("❌ Admin only", ephemeral=True)
+    key = clean_key_input(key)
+    if key in ACTIVE_KEYS:
+        del ACTIVE_KEYS[key]
+        embed = discord.Embed(title="🔒 KEY REVOKED", color=discord.Colour.orange())
+        embed.description = f"Key successfully revoked:\n`{key}`"
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("❌ Key not found", ephemeral=True)
+
+@tree.command(name="list-keys",description="Show all active keys (Admin only)")
+async def list_keys_cmd(interaction: discord.Interaction):
+    if not is_admin(interaction.user):
+        return await interaction.response.send_message("❌ Admin only", ephemeral=True)
+    if not ACTIVE_KEYS:
+        return await interaction.response.send_message("No active keys", ephemeral=True)
+    embed = discord.Embed(title="📋 ALL ACTIVE KEYS", color=discord.Colour.blue())
+    for k, v in ACTIVE_KEYS.items():
+        status = "♾️ Permanent" if v is None else f"⏰ Expires: {v.strftime('%Y-%m-%d')}"
+        embed.add_field(name=f"`{k}`", value=status, inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (Mirage API)")
 @app_commands.describe(script_name="Name of your script",your_url="Script URL or full loadstring")
@@ -182,8 +263,9 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
 async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
-    e.add_field(name="Prefix",value="`.d <link>` Deobfuscate\n`.cmds` Show commands",inline=False)
-    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
+    e.add_field(name="🔑 Key System",value="`/gen-key` Generate key\n`/validate-key` Check key\n`/revoke-key` Delete key\n`/list-keys` Show all keys",inline=False)
+    e.add_field(name="📜 Script Tools",value="`/add_loadstring` SUNDAY-LOCKED\n`/deobf-file` Deobfuscate file\n`.d <link>` Deobfuscate link",inline=False)
+    e.add_field(name="🛠️ Management",value="`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
     try:await ctx.message.delete()
     except:pass
@@ -351,7 +433,7 @@ async def unmute_user_cmd(interaction:discord.Interaction,user:discord.Member):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} — Mirage API Active")
+    print(f"✅ Online — {bot.user} | Key System Active")
     try:await tree.sync()
     except Exception as e:print(f"Sync Error: {e}")
 
