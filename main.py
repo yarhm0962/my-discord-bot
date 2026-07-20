@@ -1,7 +1,10 @@
 from flask import Flask
+from flask import request
 from threading import Thread
 import os
 import re
+import uuid
+import base64
 import aiohttp
 import asyncio
 import discord
@@ -9,9 +12,20 @@ from datetime import datetime, timedelta
 from discord import app_commands, File
 from discord.ext import commands
 
-app = Flask('')
+app = Flask(__name__)
+STORED_SCRIPTS = {}
+
+# YOUR OWN RAW ENDPOINT — NO EXTERNAL SITES!
 @app.route('/')
-def home(): return "Bot is running"
+def home():
+    return "✅ Bot Online — Raw Service Active"
+
+@app.route('/raw/<script_id>')
+def serve_raw(script_id):
+    if script_id in STORED_SCRIPTS:
+        return STORED_SCRIPTS[script_id], 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return "❌ Script Not Found", 404
+
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
 
@@ -27,23 +41,11 @@ TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
 LOADSTRING_SCHEDULES = {}
 
-async def upload_to_rentry(content):
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-            async with s.post("https://rentry.co/api/new", data={"content": content, "edit_code": "roblox123"}) as r:
-                if r.status == 200 or r.status == 201:
-                    text = await r.text()
-                    if '"url"' in text:
-                        import re as regex
-                        m = regex.search(r'"url":\s*"([^"]+)"', text)
-                        if m:
-                            return f"{m.group(1)}/raw"
-                    m2 = regex.search(r'https://rentry\.co/([a-zA-Z0-9]+)', text)
-                    if m2:
-                        return f"https://rentry.co/{m2.group(1)}/raw"
-    except Exception as e:
-        print(f"Rentry Error: {e}")
-    return None
+def get_bot_domain():
+    env_domain = os.getenv("DOMAIN", "").strip()
+    if env_domain and env_domain != "":
+        return env_domain.rstrip('/')
+    return request.host_url.rstrip('/')
 
 def generate_wrapped_lua(user_url):
     return f'''local D=os.date("%w")
@@ -167,7 +169,7 @@ async def on_message(message):
     
     await bot.process_commands(message)
 
-@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (RENTRY.CO)")
+@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (YOUR OWN LINK)")
 @app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL OR full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_loadstring:str):
     if not interaction.user.guild_permissions.administrator:
@@ -176,19 +178,21 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
     user_url = extract_url(your_loadstring)
     if not user_url:
         return await interaction.followup.send("❌ No URL found. Enter direct URL like `https://...` or full loadstring",ephemeral=True)
+    
     lua_code = generate_wrapped_lua(user_url)
-    rentry_url = await upload_to_rentry(lua_code)
-    if not rentry_url:
-        return await interaction.followup.send("❌ Upload failed. Try again in a few seconds.",ephemeral=True)
-    wrapped_ls = f'loadstring(game:HttpGet("{rentry_url}"))()'
-    script_id = f"{script_name.replace(' ','_')}_SUNDAY"
-    LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"rentry_url":rentry_url}
+    script_id = uuid.uuid4().hex[:12]
+    STORED_SCRIPTS[script_id] = lua_code
+    
+    raw_url = f"{get_bot_domain()}/raw/{script_id}"
+    wrapped_ls = f'loadstring(game:HttpGet("{raw_url}"))()'
+    LOADSTRING_SCHEDULES[script_name.replace(" ","_")] = {"name":script_name,"user_url":user_url,"raw_url":raw_url}
+    
     embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
     embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="📦 Rentry URL",value=f"||{rentry_url}||",inline=False)
+    embed.add_field(name="📦 YOUR OWN RAW LINK",value=f"||{raw_url}||",inline=False)
     embed.add_field(name="🔗 Original URL",value=f"||{user_url}||",inline=False)
     embed.description = f"**📋 COPY THIS LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
-    embed.set_footer(text="Runs ONLY on Sundays. Blocked Mon-Sat. Hosted on Rentry.co")
+    embed.set_footer(text="✅ YOUR OWN LINK — No third-party sites! No uploads! Always works!")
     await interaction.followup.send(embed=embed)
 
 @bot.command(name='cmds')
@@ -196,7 +200,7 @@ async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
     e.add_field(name="Prefix",value="`.d <link>` Deobfuscate\n`.cmds` Show commands",inline=False)
-    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED via RENTRY\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
+    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED (YOUR OWN LINK)\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
     try:await ctx.message.delete()
     except:pass
@@ -377,7 +381,7 @@ async def unmute_user_cmd(interaction:discord.Interaction,user:discord.Member):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user}")
     try:await tree.sync()
     except Exception as e:print(f"Sync Error: {e}")
 
