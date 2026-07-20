@@ -132,6 +132,7 @@ async def show_commands(ctx):
 === SLASH COMMANDS ===
 /deobf-file file: - Deobfuscate uploaded .lua file
 /create-ticket admin_role:@Role category:Name description:Text - Create ticket panel
+/create-embed description:Text color:Color - Create a custom embed
 /ban user:@User reason: - Ban a user
 /unban user_id:123456789 - Unban a user by ID
 /kick user:@User reason: - Kick a user
@@ -244,10 +245,40 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             ticket_embed.add_field(name="Actions", value="Click Close Ticket to close this channel", inline=False)
             await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
             await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
-    embed = discord.Embed(title="Create Ticket", description=panel_description, color=discord.Colour.green())
-    embed.add_field(name="Admin Role", value=admin_role.mention, inline=False)
-    embed.add_field(name="Ticket Category", value=category.name, inline=False)
+    embed = discord.Embed(description=panel_description, color=discord.Colour.green())
     await interaction.response.send_message(embed=embed, view=TicketPanel())
+
+@tree.command(name="create-embed", description="Create a custom embed")
+@app_commands.describe(
+    description="Required: The embed description text",
+    color="Optional: Embed color (name or hex, default: green)"
+)
+async def create_embed(interaction: discord.Interaction, description: str, color: str = "green"):
+    if not interaction.user.guild_permissions.manage_messages:
+        return await interaction.response.send_message("Error: Missing permission - Manage Messages", ephemeral=True)
+    color = color.lower().strip()
+    color_map = {
+        "red": discord.Colour.red(),
+        "green": discord.Colour.green(),
+        "blue": discord.Colour.blue(),
+        "gold": discord.Colour.gold(),
+        "yellow": discord.Colour.yellow(),
+        "orange": discord.Colour.orange(),
+        "purple": discord.Colour.purple(),
+        "pink": discord.Colour.magenta(),
+        "cyan": discord.Colour.teal(),
+        "black": discord.Colour.from_rgb(0,0,0),
+        "white": discord.Colour.from_rgb(255,255,255),
+        "grey": discord.Colour.light_grey()
+    }
+    embed_color = color_map.get(color, discord.Colour.green())
+    if color.startswith("#"):
+        try:
+            embed_color = discord.Colour(int(color.lstrip("#"), 16))
+        except:
+            embed_color = discord.Colour.green()
+    embed = discord.Embed(description=description, color=embed_color)
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="ban", description="Ban a user from the server")
 @app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
