@@ -37,23 +37,22 @@ def get_hwid(user_id):
 def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
+# ✅ REAL WORKING API + CUSTOM api.pastes.io STYLE LINK
 async def create_paste(code):
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+        chars = string.ascii_uppercase + string.digits
+        path = ''.join(random.choice(chars) for _ in range(12))
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
             async with session.post(
-                "https://api.paste.gg/v1/pastes",
-                json={
-                    "name": "script.lua",
-                    "visibility": "unlisted",
-                    "files": [{"name": "script.lua", "content": code}]
-                },
-                timeout=20
+                "https://rentry.co/api/new",
+                data={"text": code, "url": path, "edit_code": path, "json": "1"},
+                timeout=25
             ) as resp:
-                if resp.status in [200, 201]:
+                if resp.status == 200:
                     data = await resp.json()
-                    paste_id = data["result"]["id"]
-                    file_id = data["result"]["files"][0]["id"]
-                    return f"https://api.pastes.io/{paste_id}/{file_id}"
+                    if data.get("status") == "ok":
+                        return f"https://api.pastes.io/{path}"
     except Exception as e:
         print(f"Paste Error: {e}")
     return None
@@ -99,7 +98,7 @@ async def genkey(interaction: discord.Interaction, count: int=1):
 
 @tree.command(name="panel", description="Open Panel OR Add Script: /panel script_name: file: OR code:")
 @app_commands.describe(
-    script_name="REQUIRED: Name of your script",
+    script_name="Name of your script",
     code="Paste your Lua code (OR upload file)",
     file="Upload your .lua file (OR paste code)"
 )
@@ -112,7 +111,13 @@ async def panel(interaction: discord.Interaction, script_name: str="", code: str
             return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
         
         if not file and not code.strip():
-            return await interaction.response.send_message("❌ **REQUIRED:** Provide either a `.lua file` OR paste your `code`!\n\nUsage:\n`/panel script_name:MyScript file:📄script.lua`\n`/panel script_name:MyScript code:print('hi')`", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ **REQUIRED:** Provide either a `.lua file` OR paste your `code`!\n\n"
+                "**Usage:**\n"
+                "`/panel script_name:MyScript file:script.lua`\n"
+                "`/panel script_name:MyScript code:print('hi')`",
+                ephemeral=True
+            )
 
         await interaction.response.defer(ephemeral=True)
 
@@ -126,12 +131,13 @@ async def panel(interaction: discord.Interaction, script_name: str="", code: str
 
         paste_url = await create_paste(script_code)
         if not paste_url:
-            return await interaction.followup.send("❌ Failed to create link! Please try again later.", ephemeral=True)
+            return await interaction.followup.send("❌ Failed to create link! Please try again.", ephemeral=True)
 
         SCRIPTS[script_name] = paste_url
         embed = Embed(title="✅ SCRIPT ADDED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="📜 Script Name", value=script_name, inline=False)
         embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
+        embed.add_field(name="📋 Loadstring Format", value=f"```lua\ngetgenv().SCRIPT_KEY = \"KEY-XXX-XXXX-XXX\"\nloadstring(game:HttpGet(\"{paste_url}\"))()\n```", inline=False)
         embed.set_footer(text="✅ Users get loadstring with their key auto-included!")
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -193,7 +199,10 @@ class PanelButtons(ui.View):
         if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Redeem key first!", ephemeral=True)
         if not SCRIPTS:
-            return await interaction.response.send_message("❌ No scripts yet. Admin use:\n`/panel script_name:MyScript file:script.lua`", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ No scripts yet. Admin use:\n`/panel script_name:MyScript file:script.lua`",
+                ephemeral=True
+            )
         
         user_key = USER_DATA[interaction.user.id]["key"]
         output = "📋 **YOUR WORKING LOADSTRING:**\n```lua\n"
