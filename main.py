@@ -41,6 +41,30 @@ def parse_time(time_str):
         return amount * 86400
     return None
 
+def get_color(color_str):
+    color = color_str.lower().strip()
+    color_map = {
+        "red": discord.Colour.red(),
+        "green": discord.Colour.green(),
+        "blue": discord.Colour.blue(),
+        "gold": discord.Colour.gold(),
+        "yellow": discord.Colour.yellow(),
+        "orange": discord.Colour.orange(),
+        "purple": discord.Colour.purple(),
+        "pink": discord.Colour.magenta(),
+        "cyan": discord.Colour.teal(),
+        "black": discord.Colour.from_rgb(0,0,0),
+        "white": discord.Colour.from_rgb(255,255,255),
+        "grey": discord.Colour.light_grey()
+    }
+    embed_color = color_map.get(color, discord.Colour.green())
+    if color.startswith("#"):
+        try:
+            embed_color = discord.Colour(int(color.lstrip("#"), 16))
+        except:
+            embed_color = discord.Colour.green()
+    return embed_color
+
 def extract_url(text):
     patterns = [
         r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
@@ -141,22 +165,23 @@ async def deobfuscate_from_url(url):
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot: return
-    commands_list = """
-=== PREFIX COMMANDS ===
-.d <link or loadstring> - Deobfuscate from URL
-.cmds - Show this command list
-
-=== SLASH COMMANDS ===
-/deobf-file file: - Deobfuscate uploaded .lua file
-/create-ticket admin_role:@Role category:Name description:Text - Create ticket panel
-/create-embed description:Text color:Color - Create a custom embed
-/ban user:@User reason: - Ban a user
-/unban user_id:123456789 - Unban a user by ID
-/kick user:@User reason: - Kick a user
-/mute user:@User time:1h reason: - Mute a user with duration
-/unmute user:@User - Unmute a user
-"""
-    await ctx.author.send(commands_list.strip())
+    embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
+    embed.add_field(name="Prefix Commands", value="""
+`.d <link>` - Deobfuscate from URL
+`.cmds` - Show this command list
+""", inline=False)
+    embed.add_field(name="Slash Commands", value="""
+`/deobf-file file:` - Deobfuscate uploaded .lua file
+`/create-ticket` - Create ticket panel
+`/create-embed` - Create custom embed
+`/ban user:@User` - Ban a user
+`/unban user_id:` - Unban a user by ID
+`/kick user:@User` - Kick a user
+`/mute user:@User` - Mute a user with duration
+`/unmute user:@User` - Unmute a user
+""", inline=False)
+    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
+    await ctx.send(embed=embed)
     try:
         await ctx.message.delete()
     except:
@@ -218,12 +243,14 @@ class CloseTicketView(discord.ui.View):
 @app_commands.describe(
     admin_role="Required: Role that manages and responds to tickets",
     category="Required: Category where tickets will be created",
-    description="Optional: Custom panel description"
+    description="Optional: Custom panel description",
+    color="Optional: Panel embed color (name or hex, default: green)"
 )
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = ""):
+async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", color: str = "green"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission required", ephemeral=True)
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
+    embed_color = get_color(color)
     TICKET_SETTINGS[interaction.channel.id] = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
@@ -262,7 +289,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             ticket_embed.add_field(name="Actions", value="Click Close Ticket to close this channel", inline=False)
             await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
             await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
-    embed = discord.Embed(description=panel_description, color=discord.Colour.green())
+    embed = discord.Embed(description=panel_description, color=embed_color)
     await interaction.response.send_message(embed=embed, view=TicketPanel())
 
 @tree.command(name="create-embed", description="Create a custom embed")
@@ -273,27 +300,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
 async def create_embed(interaction: discord.Interaction, description: str, color: str = "green"):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("Error: Missing permission - Manage Messages", ephemeral=True)
-    color = color.lower().strip()
-    color_map = {
-        "red": discord.Colour.red(),
-        "green": discord.Colour.green(),
-        "blue": discord.Colour.blue(),
-        "gold": discord.Colour.gold(),
-        "yellow": discord.Colour.yellow(),
-        "orange": discord.Colour.orange(),
-        "purple": discord.Colour.purple(),
-        "pink": discord.Colour.magenta(),
-        "cyan": discord.Colour.teal(),
-        "black": discord.Colour.from_rgb(0,0,0),
-        "white": discord.Colour.from_rgb(255,255,255),
-        "grey": discord.Colour.light_grey()
-    }
-    embed_color = color_map.get(color, discord.Colour.green())
-    if color.startswith("#"):
-        try:
-            embed_color = discord.Colour(int(color.lstrip("#"), 16))
-        except:
-            embed_color = discord.Colour.green()
+    embed_color = get_color(color)
     embed = discord.Embed(description=description, color=embed_color)
     await interaction.response.send_message(embed=embed)
 
@@ -308,7 +315,11 @@ async def ban_user(interaction: discord.Interaction, user: discord.Member, reaso
         return await interaction.response.send_message("Error: You cannot ban yourself", ephemeral=True)
     ban_reason = reason if reason else "No reason provided"
     await interaction.guild.ban(user, reason=ban_reason)
-    await interaction.response.send_message(f"Success: Banned {user.mention} | Reason: {ban_reason}")
+    embed = discord.Embed(title="🔨 User Banned", color=discord.Colour.red())
+    embed.add_field(name="User", value=user.mention, inline=False)
+    embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+    embed.add_field(name="Reason", value=ban_reason, inline=False)
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="unban", description="Unban a user from the server")
 @app_commands.describe(user_id="Required: ID of the user to unban")
@@ -321,7 +332,10 @@ async def unban_user(interaction: discord.Interaction, user_id: str):
         for ban_entry in banned_users:
             if ban_entry.user.id == user_id:
                 await interaction.guild.unban(ban_entry.user)
-                return await interaction.response.send_message(f"Success: Unbanned {ban_entry.user.mention}")
+                embed = discord.Embed(title="✅ User Unbanned", color=discord.Colour.green())
+                embed.add_field(name="User", value=ban_entry.user.mention, inline=False)
+                embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+                return await interaction.response.send_message(embed=embed)
         return await interaction.response.send_message("Error: User not found in ban list", ephemeral=True)
     except ValueError:
         return await interaction.response.send_message("Error: Invalid User ID", ephemeral=True)
@@ -337,7 +351,11 @@ async def kick_user(interaction: discord.Interaction, user: discord.Member, reas
         return await interaction.response.send_message("Error: You cannot kick yourself", ephemeral=True)
     kick_reason = reason if reason else "No reason provided"
     await interaction.guild.kick(user, reason=kick_reason)
-    await interaction.response.send_message(f"Success: Kicked {user.mention} | Reason: {kick_reason}")
+    embed = discord.Embed(title="👢 User Kicked", color=discord.Colour.orange())
+    embed.add_field(name="User", value=user.mention, inline=False)
+    embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+    embed.add_field(name="Reason", value=kick_reason, inline=False)
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="mute", description="Mute a user")
 @app_commands.describe(
@@ -359,7 +377,12 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
     if duration:
         try:
             await user.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=mute_reason)
-            await interaction.response.send_message(f"Success: Timed out {user.mention} for **{time}** | Reason: {mute_reason}")
+            embed = discord.Embed(title="🔇 User Timed Out", color=discord.Colour.orange())
+            embed.add_field(name="User", value=user.mention, inline=False)
+            embed.add_field(name="Duration", value=f"**{time}**", inline=False)
+            embed.add_field(name="Reason", value=mute_reason, inline=False)
+            embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
             return await interaction.response.send_message(f"Error: Could not timeout user - {str(e)}", ephemeral=True)
     else:
@@ -373,7 +396,12 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
             return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
         
         await user.add_roles(mute_role, reason=mute_reason)
-        await interaction.response.send_message(f"Success: Muted {user.mention} **permanently** | Reason: {mute_reason}")
+        embed = discord.Embed(title="🔇 User Muted", color=discord.Colour.red())
+        embed.add_field(name="User", value=user.mention, inline=False)
+        embed.add_field(name="Duration", value="**Permanent**", inline=False)
+        embed.add_field(name="Reason", value=mute_reason, inline=False)
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        await interaction.response.send_message(embed=embed)
 
 @tree.command(name="unmute", description="Unmute a user")
 @app_commands.describe(user="Required: User to unmute")
@@ -389,9 +417,15 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if mute_role and mute_role in user.roles:
         await user.remove_roles(mute_role)
-        await interaction.response.send_message(f"Success: Unmuted {user.mention}")
+        embed = discord.Embed(title="🔊 User Unmuted", color=discord.Colour.green())
+        embed.add_field(name="User", value=user.mention, inline=False)
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        await interaction.response.send_message(embed=embed)
     else:
-        await interaction.response.send_message(f"Success: Removed timeout from {user.mention}")
+        embed = discord.Embed(title="🔊 Timeout Removed", color=discord.Colour.green())
+        embed.add_field(name="User", value=user.mention, inline=False)
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        await interaction.response.send_message(embed=embed)
 
 @bot.event
 async def on_ready():
