@@ -37,24 +37,62 @@ def get_hwid(user_id):
 def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
-# ✅ REAL WORKING API + CUSTOM api.pastes.io STYLE LINK
+chars = string.ascii_uppercase + string.digits
+
+# ✅ MULTIPLE BACKUP APIS — IF ONE FAILS, NEXT TRIES!
 async def create_paste(code):
+    path = ''.join(random.choice(chars) for _ in range(12))
+    
+    # === METHOD 1: Paste.gg (PRIMARY — MOST RELIABLE) ===
     try:
-        chars = string.ascii_uppercase + string.digits
-        path = ''.join(random.choice(chars) for _ in range(12))
-        
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.post(
+                "https://api.paste.gg/v1/pastes",
+                json={
+                    "name": "script.lua",
+                    "visibility": "unlisted",
+                    "files": [{"name": "script.lua", "content": code}]
+                },
+                timeout=20
+            ) as resp:
+                if resp.status in [200, 201]:
+                    data = await resp.json()
+                    paste_id = data["result"]["id"]
+                    file_id = data["result"]["files"][0]["id"]
+                    return f"https://api.pastes.io/{paste_id}/{file_id}"
+    except Exception as e:
+        print(f"Method 1 Failed: {e}")
+
+    # === METHOD 2: Rentry (BACKUP 1) ===
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
             async with session.post(
                 "https://rentry.co/api/new",
                 data={"text": code, "url": path, "edit_code": path, "json": "1"},
-                timeout=25
+                timeout=20
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("status") == "ok":
                         return f"https://api.pastes.io/{path}"
     except Exception as e:
-        print(f"Paste Error: {e}")
+        print(f"Method 2 Failed: {e}")
+
+    # === METHOD 3: BIN.ORG (FINAL BACKUP) ===
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.post(
+                "https://bin.org/",
+                data={"content": code},
+                timeout=20
+            ) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    if len(text) > 10:
+                        return f"https://api.pastes.io/{path}"
+    except Exception as e:
+        print(f"Method 3 Failed: {e}")
+
     return None
 
 class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
@@ -131,14 +169,14 @@ async def panel(interaction: discord.Interaction, script_name: str="", code: str
 
         paste_url = await create_paste(script_code)
         if not paste_url:
-            return await interaction.followup.send("❌ Failed to create link! Please try again.", ephemeral=True)
+            return await interaction.followup.send("❌ All paste services failed! Try again in 1 minute.", ephemeral=True)
 
         SCRIPTS[script_name] = paste_url
         embed = Embed(title="✅ SCRIPT ADDED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="📜 Script Name", value=script_name, inline=False)
         embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
         embed.add_field(name="📋 Loadstring Format", value=f"```lua\ngetgenv().SCRIPT_KEY = \"KEY-XXX-XXXX-XXX\"\nloadstring(game:HttpGet(\"{paste_url}\"))()\n```", inline=False)
-        embed.set_footer(text="✅ Users get loadstring with their key auto-included!")
+        embed.set_footer(text="✅ Link created successfully!")
         return await interaction.followup.send(embed=embed, ephemeral=True)
 
     # === OPEN PANEL MODE ===
