@@ -23,95 +23,70 @@ bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
 TICKET_SETTINGS = {}
+USER_TICKETS = {}
 WARNINGS = {}
-TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
+TIMEOUT_DURATION = 300
 
 def parse_time(time_str):
-    if not time_str:
-        return None
+    if not time_str: return None
     match = re.match(r'(\d+)([mhd])', time_str.lower().strip())
-    if not match:
-        return None
+    if not match: return None
     amount = int(match.group(1))
     unit = match.group(2)
-    if unit == 'm':
-        return amount * 60
-    elif unit == 'h':
-        return amount * 3600
-    elif unit == 'd':
-        return amount * 86400
+    if unit == 'm': return amount * 60
+    elif unit == 'h': return amount * 3600
+    elif unit == 'd': return amount * 86400
     return None
 
 def get_color(color_str):
     color = color_str.lower().strip()
     color_map = {
-        "red": discord.Colour.red(),
-        "green": discord.Colour.green(),
-        "blue": discord.Colour.blue(),
-        "gold": discord.Colour.gold(),
-        "yellow": discord.Colour.yellow(),
-        "orange": discord.Colour.orange(),
-        "purple": discord.Colour.purple(),
-        "pink": discord.Colour.magenta(),
-        "cyan": discord.Colour.teal(),
-        "black": discord.Colour.from_rgb(0,0,0),
-        "white": discord.Colour.from_rgb(255,255,255),
+        "red": discord.Colour.red(),"green": discord.Colour.green(),"blue": discord.Colour.blue(),
+        "gold": discord.Colour.gold(),"yellow": discord.Colour.yellow(),"orange": discord.Colour.orange(),
+        "purple": discord.Colour.purple(),"pink": discord.Colour.magenta(),"cyan": discord.Colour.teal(),
+        "black": discord.Colour.from_rgb(0,0,0),"white": discord.Colour.from_rgb(255,255,255),
         "grey": discord.Colour.light_grey()
     }
     embed_color = color_map.get(color, discord.Colour.green())
     if color.startswith("#"):
-        try:
-            embed_color = discord.Colour(int(color.lstrip("#"), 16))
-        except:
-            embed_color = discord.Colour.green()
+        try: embed_color = discord.Colour(int(color.lstrip("#"), 16))
+        except: embed_color = discord.Colour.green()
     return embed_color
 
 def extract_url(text):
     patterns = [
-        r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
-        r'http\.get\s*\(\s*["\']([^"\']+)["\']',
+        r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',r'http\.get\s*\(\s*["\']([^"\']+)["\']',
         r'loadstring\s*\(\s*game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
-        r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',
-        r'["\'](https?://[^"\']+)["\']'
+        r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',r'["\'](https?://[^"\']+)["\']'
     ]
     for pat in patterns:
         m = re.search(pat, text)
         if m:
             url = m.group(1)
-            if "api.pastes.io" in url:
-                return None
+            if "api.pastes.io" in url: return None
             return url
-    return text.strip() if text.strip().startswith(('http://', 'https://')) and "api.pastes.io" not in text else None
+    return text.strip() if text.strip().startswith(('http://','https://')) and "api.pastes.io" not in text else None
 
 def smart_decode(code):
-    if not code or len(code) < 5:
-        return code or ""
+    if not code or len(code) < 5: return code or ""
     original = code
     code = code.strip()
     m = re.match(r'^(loadstring\s*\(\s*)?(.+?)(\)\s*\([^)]*\)?\s*)?$', code, re.DOTALL)
     if m:
         inner = m.group(2).strip()
-        if not inner.startswith('game:HttpGet') and len(inner) > 20:
-            code = inner
-    b64_matches = []
-    patterns = [
-        r'base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
-        r'["\']([A-Za-z0-9+/=]{30,})["\']',
-        r'loadstring\s*\(\s*["\']([A-Za-z0-9+/=]{30,})["\']'
-    ]
+        if not inner.startswith('game:HttpGet') and len(inner) > 20: code = inner
+    patterns = [r'base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
+                r'["\']([A-Za-z0-9+/=]{30,})["\']',r'loadstring\s*\(\s*["\']([A-Za-z0-9+/=]{30,})["\']']
     for pat in patterns:
         for match in re.finditer(pat, code):
-            b64_matches.append(match.group(1))
-    for b64_text in b64_matches:
-        try:
-            if len(b64_text) % 4 != 0:
-                b64_text += '=' * (4 - len(b64_text) % 4)
-            decoded = base64.b64decode(b64_text).decode('utf-8', errors='ignore')
-            if decoded and len(decoded) > 10 and not decoded.startswith('--'):
-                code = decoded
-                return smart_decode(code)
-        except:
-            continue
+            b64_text = match.group(1)
+            try:
+                if len(b64_text) % 4 != 0: b64_text += '=' * (4 - len(b64_text) % 4)
+                decoded = base64.b64decode(b64_text).decode('utf-8', errors='ignore')
+                if decoded and len(decoded) > 10 and not decoded.startswith('--'):
+                    code = decoded
+                    return smart_decode(code)
+            except: continue
     rev_pattern = r'string\.reverse\s*\(\s*["\']([^"\']+)["\']'
     m = re.search(rev_pattern, code)
     if m:
@@ -119,10 +94,8 @@ def smart_decode(code):
             reversed_str = m.group(1)[::-1]
             if len(reversed_str) > 20:
                 try:
-                    b64_part = reversed_str
-                    if len(b64_part) % 4 != 0:
-                        b64_part += '=' * (4 - len(b64_part) % 4)
-                    decoded = base64.b64decode(b64_part).decode('utf-8', errors='ignore')
+                    if len(reversed_str) % 4 != 0: reversed_str += '=' * (4 - len(reversed_str) % 4)
+                    decoded = base64.b64decode(reversed_str).decode('utf-8', errors='ignore')
                     if decoded and len(decoded) > 10:
                         code = decoded
                         return smart_decode(code)
@@ -130,359 +103,255 @@ def smart_decode(code):
                     if len(reversed_str) > 10:
                         code = reversed_str
                         return smart_decode(code)
-        except:
-            pass
+        except: pass
     lines = code.split('\n')
     clean_lines = []
     for line in lines:
         ls = line.strip()
-        if ls.startswith('--') and len(ls) < 50:
-            continue
-        if 'obfuscated' in ls.lower() or 'generated' in ls.lower():
-            continue
-        if len(ls) > 10 or ls:
-            clean_lines.append(line)
-    code = '\n'.join(clean_lines)
-    return code if len(code) > 5 else original
+        if ls.startswith('--') and len(ls) < 50: continue
+        if 'obfuscated' in ls.lower() or 'generated' in ls.lower(): continue
+        if len(ls) > 10 or ls: clean_lines.append(line)
+    return '\n'.join(clean_lines) if len(clean_lines) > 5 else original
 
 async def deobfuscate_from_url(url):
     try:
-        if "api.pastes.io" in url:
-            return None, "Error: api.pastes.io does not exist! Use links like rentry.co/raw/XXX"
-        if "rentry.co" in url and "/raw/" not in url:
-            url = url.replace("rentry.co/", "rentry.co/raw/")
+        if "api.pastes.io" in url: return None, "Error: api.pastes.io does not exist! Use links like rentry.co/raw/XXX"
+        if "rentry.co" in url and "/raw/" not in url: url = url.replace("rentry.co/","rentry.co/raw/")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.get(url, timeout=30, allow_redirects=True) as resp:
-                if resp.status != 200:
-                    return None, f"HTTP Error: Status {resp.status}"
+                if resp.status != 200: return None, f"HTTP Error: Status {resp.status}"
                 code = await resp.text()
-                if not code or len(code) < 5:
-                    return None, "Error: Empty response from URL"
-                deobf = smart_decode(code)
-                return deobf, None
-    except Exception as e:
-        return None, f"Fetch Error: {str(e)[:80]}"
+                if not code or len(code) < 5: return None, "Error: Empty response from URL"
+                return smart_decode(code), None
+    except Exception as e: return None, f"Fetch Error: {str(e)[:80]}"
 
 @bot.event
 async def on_message(message):
-    if message.author.bot or not message.guild:
-        return await bot.process_commands(message)
-    
-    # Get highest role in server
+    if message.author.bot or not message.guild: return await bot.process_commands(message)
     highest_role = max(message.guild.roles, key=lambda r: r.position)
-    
-    # Check if highest role is mentioned OR any user with highest role is mentioned
-    mentioned_highest = False
-    if highest_role in message.role_mentions:
-        mentioned_highest = True
-    else:
-        for user in message.mentions:
-            if highest_role in user.roles:
-                mentioned_highest = True
-                break
-    
+    mentioned_highest = highest_role in message.role_mentions or any(highest_role in u.roles for u in message.mentions)
     if mentioned_highest:
-        guild_id = message.guild.id
-        user_id = message.author.id
-        WARNINGS.setdefault(guild_id, {})
-        WARNINGS[guild_id].setdefault(user_id, 0)
-        WARNINGS[guild_id][user_id] += 1
-        count = WARNINGS[guild_id][user_id]
-        
+        gid, uid = message.guild.id, message.author.id
+        WARNINGS.setdefault(gid, {}).setdefault(uid, 0)
+        WARNINGS[gid][uid] += 1
+        count = WARNINGS[gid][uid]
         if count == 1:
-            embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
-            embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
-            await message.channel.send(embed=embed)
+            e = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
+            e.description = f"{message.author.mention}, **Warning 1/3** — do not mention the highest role."
+            await message.channel.send(embed=e)
         elif count == 2:
-            embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
-            embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning the highest role.\nYou will be timed out after the next warning!"
-            await message.channel.send(embed=embed)
+            e = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
+            e.description = f"{message.author.mention}, **Warning 2/3** — next violation = timeout!"
+            await message.channel.send(embed=e)
         elif count >= 3:
             try:
-                await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3 times")
-                embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
-                embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
-                await message.channel.send(embed=embed)
-                WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
-            except Exception as e:
-                embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
-                embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
-                await message.channel.send(embed=embed)
-                WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
-    
+                await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3x")
+                e = discord.Embed(title="⚠️ Warning 3/3 — TIMEOUT", color=discord.Colour.red())
+                e.description = f"{message.author.mention} timed out **5 min**. Warnings reset."
+                await message.channel.send(embed=e)
+            except:
+                e = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
+                e.description = f"{message.author.mention} stop! Warnings reset."
+                await message.channel.send(embed=e)
+            WARNINGS[gid][uid] = 0
     await bot.process_commands(message)
 
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot: return
-    embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
-    embed.add_field(name="Prefix Commands", value="""
-`.d <link>` - Deobfuscate from URL
-`.cmds` - Show this command list
-""", inline=False)
-    embed.add_field(name="Auto-Features", value="""
-**Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
-""", inline=False)
-    embed.add_field(name="Slash Commands", value="""
-`/deobf-file file:` - Deobfuscate uploaded .lua file
-`/create-ticket` - Create a ticket panel
-`/create-embed` - Create a custom embed
-`/ban user:@User` - Ban a user
-`/unban user_id:` - Unban a user by ID
-`/kick user:@User` - Kick a user
-`/mute user:@User` - Mute a user with duration
-`/unmute user:@User` - Unmute a user
-""", inline=False)
-    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-    await ctx.send(embed=embed)
-    try:
-        await ctx.message.delete()
-    except:
-        pass
+    e = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
+    e.add_field(name="Prefix", value="`.d <link>` — Deobfuscate\n`.cmds` — This list", inline=False)
+    e.add_field(name="Slash Commands", value="`/deobf-file` `.lua` deobfuscate\n`/create-ticket` Ticket system\n`/create-embed` Custom embed\n`/ban`/`/unban`/`/kick` Moderation\n`/mute`/`/unmute` Timeout/Mute", inline=False)
+    e.add_field(name="Auto", value="Highest role mention protection", inline=False)
+    e.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
+    await ctx.send(embed=e)
+    try: await ctx.message.delete()
+    except: pass
 
 @bot.command(name='d')
 async def deobf_prefix(ctx, *, link: str):
     if ctx.author.bot: return
-    status_msg = await ctx.send("Processing...")
+    msg = await ctx.send("Processing...")
     url = extract_url(link)
     if not url:
-        if "api.pastes.io" in link:
-            return await status_msg.edit(content="Error: api.pastes.io does not exist! Use valid links like https://rentry.co/raw/XXX")
-        return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
-    deobf_code, error = await deobfuscate_from_url(url)
-    if error:
-        return await status_msg.edit(content=f"Error: {error}")
-    filename = f"deobfuscated_{ctx.message.id}.lua"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(deobf_code)
-    await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
-    await ctx.send(file=File(filename))
-    os.remove(filename)
+        return await msg.edit(content="Error: Invalid URL. Use rentry.co/raw/XXX or direct link.")
+    code, err = await deobfuscate_from_url(url)
+    if err: return await msg.edit(content=err)
+    fn = f"deobf_{ctx.message.id}.lua"
+    with open(fn,'w',encoding='utf-8') as f: f.write(code)
+    await msg.edit(content="✅ Success — deobfuscated:")
+    await ctx.send(file=File(fn))
+    os.remove(fn)
 
-@tree.command(name="deobf-file", description="Upload a .lua file to deobfuscate")
-@app_commands.describe(file="Upload your obfuscated .lua file")
-async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment):
-    if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
-        return await interaction.response.send_message("Error: Please upload a .lua or .txt file", ephemeral=True)
-    await interaction.response.defer()
-    try:
-        content = (await file.read()).decode('utf-8', errors='ignore')
-    except Exception as e:
-        return await interaction.followup.send(f"Error: Could not read file - {str(e)}", ephemeral=True)
-    deobf_code = smart_decode(content)
-    filename = f"deobfuscated_{interaction.id}.lua"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(deobf_code)
-    await interaction.followup.send(content="Success: File deobfuscated successfully", file=File(filename))
-    os.remove(filename)
+@tree.command(name="deobf-file")
+@app_commands.describe(file=".lua or .txt file")
+async def deobf_file(inter: discord.Interaction, file: discord.Attachment):
+    if not file.filename.endswith(('.lua','.txt')):
+        return await inter.response.send_message("Error: .lua or .txt only", ephemeral=True)
+    await inter.response.defer()
+    try: txt = (await file.read()).decode('utf-8','ignore')
+    except: return await inter.followup.send("Error: Cannot read file", ephemeral=True)
+    fn = f"deobf_{inter.id}.lua"
+    with open(fn,'w',encoding='utf-8') as f: f.write(smart_decode(txt))
+    await inter.followup.send("✅ Success:", file=File(fn))
+    os.remove(fn)
 
-class CloseTicketView(discord.ui.View):
+class CloseTicket(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
-    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = TICKET_SETTINGS.get(interaction.channel.id)
-        if not settings:
-            return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
-        staff_role = interaction.guild.get_role(settings["admin_role_id"])
-        is_staff = staff_role in interaction.user.roles if staff_role else False
-        if not (is_staff or interaction.user.guild_permissions.manage_channels):
-            return await interaction.response.send_message("Error: You do not have permission to close this ticket", ephemeral=True)
-        await interaction.response.send_message("Closing ticket in 3 seconds...")
+    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_tkt")
+    async def close_btn(self, inter: discord.Interaction, btn: discord.ui.Button):
+        s = TICKET_SETTINGS.get(inter.channel.id)
+        if not s:
+            return await inter.response.send_message("Error: Config missing", ephemeral=True)
+        sr = inter.guild.get_role(s['admin_role_id'])
+        creator_id = s.get('creator_id')
+        if not (sr and sr in inter.user.roles) and not inter.user.guild_permissions.manage_channels:
+            return await inter.response.send_message("No permission", ephemeral=True)
+        await inter.response.send_message("Closing in 3 seconds...")
         await asyncio.sleep(3)
-        await interaction.channel.delete()
+        if creator_id:
+            gid = inter.guild.id
+            USER_TICKETS.setdefault(gid, {})
+            if creator_id in USER_TICKETS[gid]:
+                del USER_TICKETS[gid][creator_id]
+        await inter.channel.delete()
 
-@tree.command(name="create-ticket", description="Create a ticket panel")
-@app_commands.describe(
-    admin_role="Required: Role that manages and responds to tickets",
-    category="Required: Category where tickets will be created",
-    description="Optional: Custom panel description",
-    color="Optional: Panel embed color (name or hex, default: green)"
-)
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", color: str = "green"):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Error: Administrator permission is required", ephemeral=True)
-    panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
-    embed_color = get_color(color)
-    TICKET_SETTINGS[interaction.channel.id] = {
-        "admin_role_id": admin_role.id,
-        "category_id": category.id,
-        "guild_id": interaction.guild.id
-    }
-    class TicketPanel(discord.ui.View):
+@tree.command(name="create-ticket")
+@app_commands.describe(admin_role="Staff role", category="Ticket category", description="Panel text", color="Embed color")
+async def tkt_panel(inter: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str="", color: str="green"):
+    if not inter.user.guild_permissions.administrator:
+        return await inter.response.send_message("Need Administrator", ephemeral=True)
+    TICKET_SETTINGS[inter.channel.id] = {'admin_role_id':admin_role.id,'category_id':category.id}
+
+    class Panel(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
-        @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.success, custom_id="create_ticket_btn")
-        async def create_btn(self, btn_interaction: discord.Interaction, button: discord.ui.Button):
-            settings = TICKET_SETTINGS.get(btn_interaction.channel_id)
-            if not settings:
-                return await btn_interaction.response.send_message("Error: Panel is not configured properly", ephemeral=True)
-            guild = btn_interaction.guild
-            ticket_category = guild.get_channel(settings["category_id"])
-            staff_role = guild.get_role(settings["admin_role_id"])
-            if not ticket_category or not staff_role:
-                return await btn_interaction.response.send_message("Error: Category or Admin Role was not found", ephemeral=True)
-            channel_name = f"{btn_interaction.user.name}-ticket"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                btn_interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        @discord.ui.button(label="🎟️ Create Ticket", style=discord.ButtonStyle.success, custom_id="make_tkt")
+        async def mk(self, b_int: discord.Interaction, btn: discord.ui.Button):
+            gid = b_int.guild.id
+            uid = b_int.user.id
+            USER_TICKETS.setdefault(gid, {})
+            if uid in USER_TICKETS[gid]:
+                ch = b_int.guild.get_channel(USER_TICKETS[gid][uid])
+                if ch:
+                    return await b_int.response.send_message(f"⚠️ You already have an open ticket! Close it first: {ch.mention}", ephemeral=True)
+                del USER_TICKETS[gid][uid]
+            s = TICKET_SETTINGS.get(b_int.channel_id)
+            cat = b_int.guild.get_channel(s['category_id'])
+            sr = b_int.guild.get_role(s['admin_role_id'])
+            if not cat or not sr:
+                return await b_int.response.send_message("Setup error", ephemeral=True)
+            ow = {
+                b_int.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                b_int.user: discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
+                sr: discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
+                b_int.guild.me: discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True)
             }
-            ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites)
-            TICKET_SETTINGS[ticket_channel.id] = {
-                "admin_role_id": admin_role.id,
-                "creator_id": btn_interaction.user.id,
-                "category_id": category.id
-            }
-            ticket_embed = discord.Embed(title="Ticket Created", description="**Please wait for a staff member to assist you**", color=discord.Colour.green())
-            ticket_embed.add_field(name="Created By", value=btn_interaction.user.mention, inline=False)
-            ticket_embed.add_field(name="Staff", value=staff_role.mention, inline=False)
-            ticket_embed.add_field(name="Access", value="Only you and staff members can view this ticket", inline=False)
-            ticket_embed.add_field(name="Actions", value="Click Close Ticket to close this channel", inline=False)
-            await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
-            await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
-    embed = discord.Embed(description=panel_description, color=embed_color)
-    await interaction.response.send_message(embed=embed, view=TicketPanel())
+            ch = await cat.create_text_channel(name=f"{b_int.user.name}-ticket", overwrites=ow)
+            USER_TICKETS[gid][uid] = ch.id
+            TICKET_SETTINGS[ch.id] = {'admin_role_id':sr.id,'creator_id':uid}
+            e = discord.Embed(title="🎟️ Ticket Created", color=discord.Colour.green())
+            e.add_field(name="Created By", value=b_int.user.mention, inline=False)
+            e.add_field(name="Staff Role", value=sr.mention, inline=False)
+            await ch.send(embed=e, view=CloseTicket())
+            await b_int.response.send_message(f"✅ Ticket created → {ch.mention}", ephemeral=True)
 
-@tree.command(name="create-embed", description="Create a custom embed")
-@app_commands.describe(
-    description="Required: The embed description text",
-    color="Optional: Embed color (name or hex, default: green)"
-)
-async def create_embed(interaction: discord.Interaction, description: str, color: str = "green"):
-    if not interaction.user.guild_permissions.manage_messages:
-        return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
-    embed_color = get_color(color)
-    embed = discord.Embed(description=description, color=embed_color)
-    await interaction.response.send_message(embed=embed)
+    e = discord.Embed(description=description or "**🎟️ CREATE A TICKET BELOW**", color=get_color(color))
+    await inter.response.send_message(embed=e, view=Panel())
 
-@tree.command(name="ban", description="Ban a user from the server")
-@app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
-async def ban_user(interaction: discord.Interaction, user: discord.Member, reason: str = ""):
-    if not interaction.user.guild_permissions.ban_members:
-        return await interaction.response.send_message("Error: Missing permission — Ban Members", ephemeral=True)
-    if user.top_role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
-        return await interaction.response.send_message("Error: You cannot ban a user with a higher or equal role", ephemeral=True)
-    if user == interaction.user:
-        return await interaction.response.send_message("Error: You cannot ban yourself", ephemeral=True)
-    ban_reason = reason if reason else "No reason provided"
-    await interaction.guild.ban(user, reason=ban_reason)
-    embed = discord.Embed(title="🔨 User Banned", color=discord.Colour.red())
-    embed.add_field(name="User", value=user.mention, inline=False)
-    embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-    embed.add_field(name="Reason", value=ban_reason, inline=False)
-    await interaction.response.send_message(embed=embed)
+@tree.command(name="create-embed")
+@app_commands.describe(description="Embed text", color="Color name or hex")
+async def mk_embed(inter: discord.Interaction, description: str, color: str="green"):
+    if not inter.user.guild_permissions.manage_messages:
+        return await inter.response.send_message("Need Manage Messages", ephemeral=True)
+    await inter.response.send_message(embed=discord.Embed(description=description, color=get_color(color)))
 
-@tree.command(name="unban", description="Unban a user from the server")
-@app_commands.describe(user_id="Required: ID of the user to unban")
-async def unban_user(interaction: discord.Interaction, user_id: str):
-    if not interaction.user.guild_permissions.ban_members:
-        return await interaction.response.send_message("Error: Missing permission — Ban Members", ephemeral=True)
-    try:
-        user_id = int(user_id)
-        banned_users = [entry async for entry in interaction.guild.bans()]
-        for ban_entry in banned_users:
-            if ban_entry.user.id == user_id:
-                await interaction.guild.unban(ban_entry.user)
-                embed = discord.Embed(title="✅ User Unbanned", color=discord.Colour.green())
-                embed.add_field(name="User", value=ban_entry.user.mention, inline=False)
-                embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-                return await interaction.response.send_message(embed=embed)
-        return await interaction.response.send_message("Error: User was not found in the ban list", ephemeral=True)
-    except ValueError:
-        return await interaction.response.send_message("Error: Invalid User ID", ephemeral=True)
+@tree.command(name="ban")
+@app_commands.describe(user="User to ban", reason="Reason")
+async def ban(inter: discord.Interaction, user: discord.Member, reason: str="No reason"):
+    if not inter.user.guild_permissions.ban_members: return await inter.response.send_message("No permission", ephemeral=True)
+    if user.top_role >= inter.user.top_role and inter.user.id != inter.guild.owner_id:
+        return await inter.response.send_message("Cannot ban higher/equal role", ephemeral=True)
+    if user == inter.user: return await inter.response.send_message("Cannot ban yourself", ephemeral=True)
+    await inter.guild.ban(user, reason=reason)
+    e = discord.Embed(title="🔨 Banned", color=discord.Colour.red())
+    e.add_field(name="User", value=user.mention, inline=False)
+    e.add_field(name="Mod", value=inter.user.mention, inline=False)
+    e.add_field(name="Reason", value=reason, inline=False)
+    await inter.response.send_message(embed=e)
 
-@tree.command(name="kick", description="Kick a user from the server")
-@app_commands.describe(user="Required: User to kick", reason="Optional: Reason for the kick")
-async def kick_user(interaction: discord.Interaction, user: discord.Member, reason: str = ""):
-    if not interaction.user.guild_permissions.kick_members:
-        return await interaction.response.send_message("Error: Missing permission — Kick Members", ephemeral=True)
-    if user.top_role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
-        return await interaction.response.send_message("Error: You cannot kick a user with a higher or equal role", ephemeral=True)
-    if user == interaction.user:
-        return await interaction.response.send_message("Error: You cannot kick yourself", ephemeral=True)
-    kick_reason = reason if reason else "No reason provided"
-    await interaction.guild.kick(user, reason=kick_reason)
-    embed = discord.Embed(title="👢 User Kicked", color=discord.Colour.orange())
-    embed.add_field(name="User", value=user.mention, inline=False)
-    embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-    embed.add_field(name="Reason", value=kick_reason, inline=False)
-    await interaction.response.send_message(embed=embed)
+@tree.command(name="unban")
+@app_commands.describe(user_id="User ID")
+async def unban(inter: discord.Interaction, user_id: str):
+    if not inter.user.guild_permissions.ban_members: return await inter.response.send_message("No permission", ephemeral=True)
+    try: uid = int(user_id)
+    except: return await inter.response.send_message("Invalid ID", ephemeral=True)
+    async for entry in inter.guild.bans():
+        if entry.user.id == uid:
+            await inter.guild.unban(entry.user)
+            e = discord.Embed(title="✅ Unbanned", color=discord.Colour.green())
+            e.add_field(name="User", value=entry.user.mention, inline=False)
+            e.add_field(name="Mod", value=inter.user.mention, inline=False)
+            return await inter.response.send_message(embed=e)
+    await inter.response.send_message("User not banned", ephemeral=True)
 
-@tree.command(name="mute", description="Mute a user")
-@app_commands.describe(
-    user="Required: User to mute",
-    time="Optional: Enter a duration such as 1m, 1h, 1d, etc.",
-    reason="Optional: Reason for the mute"
-)
-async def mute_user(interaction: discord.Interaction, user: discord.Member, time: str = "", reason: str = ""):
-    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
-        return await interaction.response.send_message("Error: Missing permission — Manage Roles or Moderate Members", ephemeral=True)
-    if user.top_role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
-        return await interaction.response.send_message("Error: You cannot mute a user with a higher or equal role", ephemeral=True)
-    if user == interaction.user:
-        return await interaction.response.send_message("Error: You cannot mute yourself", ephemeral=True)
-    
-    mute_reason = reason if reason else "No reason provided"
-    duration = parse_time(time)
-    
-    if duration:
-        try:
-            await user.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=mute_reason)
-            embed = discord.Embed(title="🔇 User Timed Out", color=discord.Colour.orange())
-            embed.add_field(name="User", value=user.mention, inline=False)
-            embed.add_field(name="Duration", value=f"**{time}**", inline=False)
-            embed.add_field(name="Reason", value=mute_reason, inline=False)
-            embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-            await interaction.response.send_message(embed=embed)
-        except Exception as e:
-            return await interaction.response.send_message(f"Error: Could not time out user — {str(e)}", ephemeral=True)
+@tree.command(name="kick")
+@app_commands.describe(user="User to kick", reason="Reason")
+async def kick(inter: discord.Interaction, user: discord.Member, reason: str="No reason"):
+    if not inter.user.guild_permissions.kick_members: return await inter.response.send_message("No permission", ephemeral=True)
+    if user.top_role >= inter.user.top_role and inter.user.id != inter.guild.owner_id:
+        return await inter.response.send_message("Cannot kick higher/equal role", ephemeral=True)
+    if user == inter.user: return await inter.response.send_message("Cannot kick yourself", ephemeral=True)
+    await inter.guild.kick(user, reason=reason)
+    e = discord.Embed(title="👢 Kicked", color=discord.Colour.orange())
+    e.add_field(name="User", value=user.mention, inline=False)
+    e.add_field(name="Mod", value=inter.user.mention, inline=False)
+    e.add_field(name="Reason", value=reason, inline=False)
+    await inter.response.send_message(embed=e)
+
+@tree.command(name="mute")
+@app_commands.describe(user="User", time="1m/1h/1d", reason="Reason")
+async def mute(inter: discord.Interaction, user: discord.Member, time: str="", reason: str="No reason"):
+    if not inter.user.guild_permissions.moderate_members: return await inter.response.send_message("No permission", ephemeral=True)
+    if user.top_role >= inter.user.top_role and inter.user.id != inter.guild.owner_id:
+        return await inter.response.send_message("Cannot mute higher/equal role", ephemeral=True)
+    if user == inter.user: return await inter.response.send_message("Cannot mute yourself", ephemeral=True)
+    dur = parse_time(time)
+    if dur:
+        await user.timeout(discord.utils.utcnow()+timedelta(seconds=dur), reason=reason)
+        e = discord.Embed(title="🔇 Timed Out", color=discord.Colour.orange())
+        e.add_field(name="User", value=user.mention, inline=False)
+        e.add_field(name="Duration", value=time, inline=False)
+        e.add_field(name="Reason", value=reason, inline=False)
+        await inter.response.send_message(embed=e)
     else:
-        mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
-        if not mute_role:
-            mute_role = await interaction.guild.create_role(name="Muted")
-            for channel in interaction.guild.channels:
-                await channel.set_permissions(mute_role, send_messages=False, speak=False)
-        
-        if mute_role in user.roles:
-            return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
-        
-        await user.add_roles(mute_role, reason=mute_reason)
-        embed = discord.Embed(title="🔇 User Muted", color=discord.Colour.red())
-        embed.add_field(name="User", value=user.mention, inline=False)
-        embed.add_field(name="Duration", value="**Permanent**", inline=False)
-        embed.add_field(name="Reason", value=mute_reason, inline=False)
-        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-        await interaction.response.send_message(embed=embed)
+        role = discord.utils.get(inter.guild.roles, name="Muted")
+        if not role:
+            role = await inter.guild.create_role(name="Muted")
+            for ch in inter.guild.channels: await ch.set_permissions(role, send_messages=False, speak=False)
+        if role in user.roles: return await inter.response.send_message("Already muted", ephemeral=True)
+        await user.add_roles(role, reason=reason)
+        e = discord.Embed(title="🔇 Muted", color=discord.Colour.red())
+        e.add_field(name="User", value=user.mention, inline=False)
+        e.add_field(name="Reason", value=reason, inline=False)
+        await inter.response.send_message(embed=e)
 
-@tree.command(name="unmute", description="Unmute a user")
-@app_commands.describe(user="Required: User to unmute")
-async def unmute_user(interaction: discord.Interaction, user: discord.Member):
-    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
-        return await interaction.response.send_message("Error: Missing permission — Manage Roles or Moderate Members", ephemeral=True)
-    
-    try:
-        await user.timeout(None)
-    except:
-        pass
-    
-    mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
-    if mute_role and mute_role in user.roles:
-        await user.remove_roles(mute_role)
-        embed = discord.Embed(title="🔊 User Unmuted", color=discord.Colour.green())
-        embed.add_field(name="User", value=user.mention, inline=False)
-        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-        await interaction.response.send_message(embed=embed)
-    else:
-        embed = discord.Embed(title="🔊 Timeout Removed", color=discord.Colour.green())
-        embed.add_field(name="User", value=user.mention, inline=False)
-        embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-        await interaction.response.send_message(embed=embed)
+@tree.command(name="unmute")
+@app_commands.describe(user="User to unmute")
+async def unmute(inter: discord.Interaction, user: discord.Member):
+    if not inter.user.guild_permissions.moderate_members: return await inter.response.send_message("No permission", ephemeral=True)
+    try: await user.timeout(None)
+    except: pass
+    role = discord.utils.get(inter.guild.roles, name="Muted")
+    if role and role in user.roles: await user.remove_roles(role)
+    e = discord.Embed(title="🔊 Unmuted", color=discord.Colour.green())
+    e.add_field(name="User", value=user.mention, inline=False)
+    await inter.response.send_message(embed=e)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user}")
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
