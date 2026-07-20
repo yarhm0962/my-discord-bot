@@ -1,4 +1,5 @@
 from flask import Flask
+from flask import request
 from threading import Thread
 import os
 import re
@@ -14,6 +15,7 @@ from discord.ext import commands
 app = Flask(__name__)
 STORED_SCRIPTS = {}
 
+# ✅ YOUR RAW ENDPOINT — PUBLICLY ACCESSIBLE!
 @app.route('/')
 def home():
     return "✅ Bot Online — Raw Service Active"
@@ -39,11 +41,18 @@ TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
 LOADSTRING_SCHEDULES = {}
 
-DOMAIN = os.getenv("DOMAIN", "").strip()
-if not DOMAIN:
-    DOMAIN = "https://" + os.getenv("REPLIT_DEV_DOMAIN", "").strip()
-if not DOMAIN or DOMAIN == "https://":
-    DOMAIN = "http://127.0.0.1:8080"
+# ✅ AUTO-DETECTS YOUR DOMAIN — NO VARIABLE NEEDED!
+def get_bot_domain():
+    # Replit auto-domain
+    replit_domain = os.getenv("REPLIT_DOMAIN", "").strip()
+    if replit_domain:
+        return f"https://{replit_domain}"
+    # Manual domain variable
+    env_domain = os.getenv("DOMAIN", "").strip()
+    if env_domain and env_domain != "":
+        return env_domain.rstrip('/')
+    # Fallback — tell user to open webview
+    return "⚠️OPEN BOT WEBVIEW FIRST AND RESTART"
 
 def generate_wrapped_lua(user_url):
     return f'''local D=os.date("%w")
@@ -167,7 +176,7 @@ async def on_message(message):
     
     await bot.process_commands(message)
 
-@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (YOUR OWN LINK)")
+@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring")
 @app_commands.describe(script_name="Name of your script",your_url="Script URL or full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_url:str):
     if not interaction.user.guild_permissions.administrator:
@@ -181,15 +190,16 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
     script_id = uuid.uuid4().hex[:12]
     STORED_SCRIPTS[script_id] = lua_code
     
-    raw_url = f"{DOMAIN}/raw/{script_id}"
+    domain = get_bot_domain()
+    raw_url = f"{domain}/raw/{script_id}"
     wrapped_ls = f'loadstring(game:HttpGet("{raw_url}"))()'
     
     embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
     embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="📦 YOUR RAW LINK",value=f"||{raw_url}||",inline=False)
-    embed.add_field(name="🔗 Original URL",value=f"||{user_url}||",inline=False)
-    embed.description = f"**📋 LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
-    embed.set_footer(text="✅ Instant — No uploads! Always works!")
+    embed.add_field(name="📦 YOUR RAW LINK",value=f"`{raw_url}`",inline=False)
+    embed.add_field(name="🔗 ORIGINAL URL",value=f"`{user_url}`",inline=False)
+    embed.add_field(name="📋 FULL LOADSTRING",value=f"```lua\n{wrapped_ls}\n```",inline=False)
+    embed.set_footer(text="✅ Click link to test! Open bot webview first if domain shows ⚠️")
     
     await interaction.response.send_message(embed=embed)
 
