@@ -133,40 +133,46 @@ def clean_expired_warnings(gid, uid):
         return True
     return False
 
-@bot.event
-async def on_message(message):
-    if message.author.bot or not message.guild: return await bot.process_commands(message)
-    highest_role = max(message.guild.roles, key=lambda r: r.position)
-    mentioned_highest = (highest_role in message.role_mentions) or any(highest_role in u.roles for u in message.mentions)
-    if mentioned_highest:
-        gid = str(message.guild.id)
-        uid = str(message.author.id)
-        if gid not in WARNINGS: WARNINGS[gid] = {}
-        clean_expired_warnings(gid, uid)
-        if uid not in WARNINGS[gid]:
-            WARNINGS[gid][uid] = {"count": 1, "time": datetime.utcnow()}
+class KeyValidateModal(discord.ui.Modal, title="🔑 KEY VALIDATION"):
+    key_input = discord.ui.TextInput(label="Enter Your Key", placeholder="MIRAGE-XXXX-XXXX-XXXX", required=True, min_length=19)
+    async def on_submit(self, interaction: discord.Interaction):
+        key = clean_key_input(str(self.key_input))
+        if key in ACTIVE_KEYS:
+            expiry = ACTIVE_KEYS[key]
+            if expiry is None:
+                embed = discord.Embed(title="✅ KEY VALID", color=discord.Colour.green())
+                embed.add_field(name="Status", value="✅ ACTIVE — Permanent", inline=False)
+            else:
+                remaining = expiry - datetime.utcnow()
+                if remaining.total_seconds() > 0:
+                    days = remaining.days
+                    hours = remaining.seconds // 3600
+                    embed = discord.Embed(title="✅ KEY VALID", color=discord.Colour.green())
+                    embed.add_field(name="Status", value="✅ ACTIVE", inline=False)
+                    embed.add_field(name="Time Remaining", value=f"📅 {days}d {hours}h", inline=False)
+                else:
+                    del ACTIVE_KEYS[key]
+                    embed = discord.Embed(title="⏰ KEY EXPIRED", color=discord.Colour.orange())
+                    embed.description = "This key has expired — contact admin"
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
-            WARNINGS[gid][uid]["count"] += 1
-            WARNINGS[gid][uid]["time"] = datetime.utcnow()
-        count = WARNINGS[gid][uid]["count"]
-        if count == 1:
-            e = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
-            e.description = f"{message.author.mention}, please do not mention the highest role.\n⚠️ Warnings auto-reset after {WARNING_EXPIRE_MINUTES} minutes."
-            await message.channel.send(embed=e)
-        elif count == 2:
-            e = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
-            e.description = f"{message.author.mention}, one more warning and you will be timed out.\n⚠️ Warnings auto-reset after {WARNING_EXPIRE_MINUTES} minutes."
-            await message.channel.send(embed=e)
-        elif count >= 3:
-            try:
-                until = discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION)
-                await message.author.timeout(until, reason="Mentioned highest role repeatedly")
-            except: pass
-            e = discord.Embed(title="🔒 Warning 3/3 — Timed Out!", color=discord.Colour.red())
-            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ Warnings reset!"
-            await message.channel.send(embed=e)
-            del WARNINGS[gid][uid]
-    await bot.process_commands(message)
+            embed = discord.Embed(title="❌ INVALID KEY", color=discord.Colour.red())
+            embed.description = "Key not found — check your key or ask admin"
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class KeyPanelView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+    @discord.ui.button(label="🔑 VALIDATE KEY", style=discord.ButtonStyle.success, custom_id="validate_key_btn")
+    async def validate_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(KeyValidateModal())
+
+@tree.command(name="create-key-panel",description="Create key validation panel (Admin only)")
+async def create_key_panel(interaction: discord.Interaction):
+    if not is_admin(interaction.user):
+        return await interaction.response.send_message("❌ Admin only", ephemeral=True)
+    embed = discord.Embed(title="🔑 KEY SYSTEM", description="Click the button below and enter your key to validate access.", color=discord.Colour.teal())
+    embed.set_footer(text="Mirage Key System — Enter key → Instant Result")
+    await interaction.response.send_message(embed=embed, view=KeyPanelView())
 
 @tree.command(name="gen-key",description="Generate new key (Admin only)")
 @app_commands.describe(days="Days until expiry — leave empty for permanent")
@@ -263,7 +269,7 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
 async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
-    e.add_field(name="🔑 Key System",value="`/gen-key` Generate key\n`/validate-key` Check key\n`/revoke-key` Delete key\n`/list-keys` Show all keys",inline=False)
+    e.add_field(name="🔑 Key System",value="`/create-key-panel` Make panel\n`/gen-key` Generate key\n`/validate-key` Check key\n`/revoke-key` Delete key\n`/list-keys` Show all keys",inline=False)
     e.add_field(name="📜 Script Tools",value="`/add_loadstring` SUNDAY-LOCKED\n`/deobf-file` Deobfuscate file\n`.d <link>` Deobfuscate link",inline=False)
     e.add_field(name="🛠️ Management",value="`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
@@ -433,7 +439,7 @@ async def unmute_user_cmd(interaction:discord.Interaction,user:discord.Member):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Online — {bot.user} | Key System Active")
+    print(f"✅ Online — {bot.user} | Key System + Panel Active")
     try:await tree.sync()
     except Exception as e:print(f"Sync Error: {e}")
 
