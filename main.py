@@ -24,33 +24,33 @@ USER_DATA = {}
 VALID_KEYS = {}
 SCRIPTS = {}
 
-ADMIN_IDS = []
-
 def generate_key():
     part1 = ''.join(random.choices(string.ascii_uppercase, k=3))
     part2 = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     part3 = ''.join(random.choices(string.ascii_uppercase, k=3))
     return f"KEY-{part1}-{part2}-{part3}"
 
-def get_hwid(user_id: int) -> str:
+def get_hwid(user_id):
     return hashlib.md5(str(user_id).encode()).hexdigest()[:16].upper()
 
-def is_verified(user_id: int) -> bool:
+def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
 @bot.event
 async def on_ready():
     print(f'✅ Logged in as {bot.user}')
     await bot.change_presence(activity=discord.Game(name="/panel | Control Panel"))
-    await tree.sync()
-    print("✅ Slash commands synced!")
+    try:
+        await tree.sync()
+        print("✅ Slash commands synced!")
+    except Exception as e:
+        print(f"⚠️ Sync note: {e}")
 
 @tree.command(name="genkey", description="Generate a new key (Admin only)")
 async def genkey(interaction: discord.Interaction, count: int=1):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-    if count < 1: count = 1
-    if count > 10: count = 10
+    count = max(1, min(count, 10))
     new_keys = []
     for _ in range(count):
         key = generate_key()
@@ -88,11 +88,7 @@ async def redeem(interaction: discord.Interaction, key: str):
     user_id = interaction.user.id
     hwid = get_hwid(user_id)
     if key in VALID_KEYS:
-        USER_DATA[user_id] = {
-            "key": key,
-            "hwid": hwid,
-            "verified": True
-        }
+        USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
         embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
         embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
@@ -107,7 +103,7 @@ async def redeem(interaction: discord.Interaction, key: str):
 async def reset_hwid(interaction: discord.Interaction):
     user_id = interaction.user.id
     if not is_verified(user_id):
-        return await interaction.response.send_message("❌ You are not verified! Use /redeem first.", ephemeral=True)
+        return await interaction.response.send_message("❌ Not verified! Use /redeem first.", ephemeral=True)
     new_hwid = get_hwid(random.randint(1000000000, 9999999999))
     USER_DATA[user_id]["hwid"] = new_hwid
     embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
@@ -118,7 +114,7 @@ async def reset_hwid(interaction: discord.Interaction):
 async def get_script(interaction: discord.Interaction, name: str=None):
     user_id = interaction.user.id
     if not is_verified(user_id):
-        return await interaction.response.send_message("❌ You are not verified! Use /redeem first.", ephemeral=True)
+        return await interaction.response.send_message("❌ Not verified! Use /redeem first.", ephemeral=True)
     if not name:
         return await interaction.response.send_message(f"❌ Usage: /get_script [name] | Available: {', '.join(SCRIPTS.keys()) or 'None'}", ephemeral=True)
     if name in SCRIPTS:
