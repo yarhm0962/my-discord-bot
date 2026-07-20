@@ -2,6 +2,7 @@ from flask import Flask
 from threading import Thread
 import os
 import re
+import json
 import aiohttp
 import asyncio
 import discord
@@ -28,15 +29,16 @@ LOADSTRING_SCHEDULES = {}
 
 async def upload_to_pastefy(content):
     try:
+        payload = {"content": content}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-            async with s.post("https://pastefy.app/api/pastes", data=content) as r:
+            async with s.post("https://pastefy.app/api/pastes", json=payload, headers={"Content-Type":"application/json"}) as r:
                 if r.status in (200, 201):
                     data = await r.json()
                     paste_id = data.get("id")
                     if paste_id:
                         return f"https://pastefy.app/{paste_id}/raw"
-    except:
-        pass
+    except Exception as e:
+        print(f"Pastefy Error: {e}")
     return None
 
 def generate_wrapped_lua(user_url):
@@ -115,25 +117,31 @@ async def deobfuscate_from_url(url):
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild: return await bot.process_commands(message)
-    highest_role=max(message.guild.roles,key=lambda r:r.position)
-    mentioned_highest=(highest_role in message.role_mentions)or any(highest_role in u.roles for u in message.mentions)
+    highest_role = max(message.guild.roles, key=lambda r: r.position)
+    mentioned_highest = (highest_role in message.role_mentions) or any(highest_role in u.roles for u in message.mentions)
     if mentioned_highest:
-        gid,uid=message.guild.id,message.author.id
-        WARNINGS.setdefault(gid,{});WARNINGS[gid].setdefault(uid,0);WARNINGS[gid][uid]+=1;c=WARNINGS[gid][uid]
-        if c==1:
-            e=discord.Embed(title="Warning 1/3",color=discord.Colour.yellow())
-            e.description=f"{message.author.mention}, please do not mention the highest role."
+        gid, uid = str(message.guild.id), str(message.author.id)
+        if gid not in WARNINGS: WARNINGS[gid] = {}
+        if uid not in WARNINGS[gid]: WARNINGS[gid][uid] = 0
+        WARNINGS[gid][uid] += 1
+        count = WARNINGS[gid][uid]
+        if count == 1:
+            e = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
+            e.description = f"{message.author.mention}, please do not mention the highest role."
             await message.channel.send(embed=e)
-        elif c==2:
-            e=discord.Embed(title="Warning 2/3",color=discord.Colour.orange())
-            e.description=f"{message.author.mention}, one more warning and you will be timed out."
+        elif count == 2:
+            e = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
+            e.description = f"{message.author.mention}, one more warning and you will be timed out."
             await message.channel.send(embed=e)
-        elif c>=3:
-            try:await message.author.timeout(discord.utils.utcnow()+timedelta(seconds=TIMEOUT_DURATION),reason="Mentioned highest role")
-            except:pass
-            e=discord.Embed(title="Warning 3/3 — Timed Out!",color=discord.Colour.red())
-            e.description=f"{message.author.mention} has been timed out for 5 minutes."
-            await message.channel.send(embed=e);WARNINGS[gid][uid]=0
+        elif count >= 3:
+            try:
+                until = discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION)
+                await message.author.timeout(until, reason="Mentioned highest role repeatedly")
+            except: pass
+            e = discord.Embed(title="🔒 Warning 3/3 — Timed Out!", color=discord.Colour.red())
+            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n**Warnings frozen at 3 — no more counting.**"
+            await message.channel.send(embed=e)
+            WARNINGS[gid][uid] = 3
     await bot.process_commands(message)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (PASTEFY)")
@@ -144,11 +152,11 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
     await interaction.response.defer()
     user_url = extract_url(your_loadstring)
     if not user_url:
-        return await interaction.followup.send("❌ Invalid input. Enter direct URL like `https://...` OR full loadstring",ephemeral=True)
+        return await interaction.followup.send("❌ No URL found. Enter direct URL like `https://...` or full loadstring",ephemeral=True)
     lua_code = generate_wrapped_lua(user_url)
     pastefy_url = await upload_to_pastefy(lua_code)
     if not pastefy_url:
-        return await interaction.followup.send("❌ Failed to upload to Pastefy. Try again.",ephemeral=True)
+        return await interaction.followup.send("❌ Pastefy upload failed. Try again in a few seconds.",ephemeral=True)
     wrapped_ls = f'loadstring(game:HttpGet("{pastefy_url}"))()'
     script_id = f"{script_name.replace(' ','_')}_SUNDAY"
     LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"pastefy_url":pastefy_url}
