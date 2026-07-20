@@ -17,19 +17,14 @@ def keep_alive(): Thread(target=run).start()
 intents = discord.Intents.default()
 intents.message_content = True
 
-class Bot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix='!', intents=intents, help_command=None)
-        self.tree = app_commands.CommandTree(self)
-
-    async def setup_hook(self):
-        await self.tree.sync()
-
-bot = Bot()
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+tree = app_commands.CommandTree(bot)
 
 USER_DATA = {}
 VALID_KEYS = {}
 SCRIPTS = {}
+
+ADMIN_IDS = []
 
 def generate_key():
     part1 = ''.join(random.choices(string.ascii_uppercase, k=3))
@@ -47,11 +42,13 @@ def is_verified(user_id: int) -> bool:
 async def on_ready():
     print(f'✅ Logged in as {bot.user}')
     await bot.change_presence(activity=discord.Game(name="/panel | Control Panel"))
-    await bot.tree.sync()
+    await tree.sync()
+    print("✅ Slash commands synced!")
 
-@bot.tree.command(name="genkey", description="Generate a new key (Admin only)")
-@app_commands.checks.has_permissions(administrator=True)
+@tree.command(name="genkey", description="Generate a new key (Admin only)")
 async def genkey(interaction: discord.Interaction, count: int=1):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
     if count < 1: count = 1
     if count > 10: count = 10
     new_keys = []
@@ -65,7 +62,7 @@ async def genkey(interaction: discord.Interaction, count: int=1):
     embed.set_footer(text="Use /redeem to activate your key")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="panel", description="Open Control Panel")
+@tree.command(name="panel", description="Open Control Panel")
 async def panel(interaction: discord.Interaction):
     user_id = interaction.user.id
     verified = is_verified(user_id)
@@ -86,7 +83,7 @@ async def panel(interaction: discord.Interaction):
     view = PanelButtons(verified, user_id)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-@bot.tree.command(name="redeem", description="Redeem your key to unlock access")
+@tree.command(name="redeem", description="Redeem your key to unlock access")
 async def redeem(interaction: discord.Interaction, key: str):
     user_id = interaction.user.id
     hwid = get_hwid(user_id)
@@ -106,7 +103,7 @@ async def redeem(interaction: discord.Interaction, key: str):
         embed.description = "The key you entered is not recognized. Please check your key and try again."
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="reset_hwid", description="Reset your HWID")
+@tree.command(name="reset_hwid", description="Reset your HWID")
 async def reset_hwid(interaction: discord.Interaction):
     user_id = interaction.user.id
     if not is_verified(user_id):
@@ -117,7 +114,7 @@ async def reset_hwid(interaction: discord.Interaction):
     embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="get_script", description="Get your script loadstring")
+@tree.command(name="get_script", description="Get your script loadstring")
 async def get_script(interaction: discord.Interaction, name: str=None):
     user_id = interaction.user.id
     if not is_verified(user_id):
@@ -134,9 +131,10 @@ async def get_script(interaction: discord.Interaction, name: str=None):
     else:
         await interaction.response.send_message(f"❌ Script `{name}` not found!", ephemeral=True)
 
-@bot.tree.command(name="add_script", description="Add a new script (Admin only)")
-@app_commands.checks.has_permissions(administrator=True)
+@tree.command(name="add_script", description="Add a new script (Admin only)")
 async def add_script(interaction: discord.Interaction, name: str, code: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
     SCRIPTS[name] = code
     await interaction.response.send_message(f"✅ Script `{name}` saved!", ephemeral=True)
 
