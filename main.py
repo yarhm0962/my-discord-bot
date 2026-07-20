@@ -6,7 +6,7 @@ import base64
 import aiohttp
 import asyncio
 import discord
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 from discord import app_commands, File
 from discord.ext import commands
 
@@ -27,22 +27,16 @@ WARNINGS = {}
 TIMEOUT_DURATION = 300
 LOADSTRING_SCHEDULES = {}
 
-DAY_CHOICES = [
-    app_commands.Choice(name="Sunday", value="0"),
-    app_commands.Choice(name="Monday", value="1"),
-    app_commands.Choice(name="Tuesday", value="2"),
-    app_commands.Choice(name="Wednesday", value="3"),
-    app_commands.Choice(name="Thursday", value="4"),
-    app_commands.Choice(name="Friday", value="5"),
-    app_commands.Choice(name="Saturday", value="6"),
-]
-
 DAY_NAMES = {
     "0": "Sunday", "1": "Monday", "2": "Tuesday",
     "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday"
 }
 
-def generate_wrapped_loadstring(user_url, active_day, script_name):
+def get_today_day_value():
+    return str(datetime.utcnow().isoweekday() % 7)
+
+def generate_wrapped_loadstring(user_url, script_name):
+    active_day = get_today_day_value()
     lua_code = f'''local ALLOWED_DAY = "{active_day}"
 local TODAY = os.date("%w")
 if TODAY ~= ALLOWED_DAY then
@@ -57,7 +51,7 @@ if TODAY ~= ALLOWED_DAY then
 end
 loadstring(game:HttpGet("{user_url}"))()'''
     b64 = base64.b64encode(lua_code.encode('utf-8')).decode('utf-8')
-    return f'loadstring(game:HttpGet("https://api-pastes.github.io/?b64={b64}"))()'
+    return f'loadstring(game:HttpGet("https://api-pastes.github.io/?b64={b64}"))()', active_day
 
 def parse_time(time_str):
     if not time_str: return None
@@ -146,9 +140,9 @@ async def on_message(message):
             await message.channel.send(embed=e); WARNINGS[gid][uid]=0
     await bot.process_commands(message)
 
-@tree.command(name="add_loadstring",description="Create DAY-LOCKED loadstring")
-@app_commands.describe(script_name="Name of your script",your_loadstring="Your full loadstring or raw URL",repeat_day="Day when script is ALLOWED to run")
-async def add_loadstring_cmd(interaction: discord.Interaction, script_name: str, your_loadstring: str, repeat_day: app_commands.Choice[str]):
+@tree.command(name="add_loadstring",description="Create DAY-LOCKED loadstring (Auto: Today's Day)")
+@app_commands.describe(script_name="Name of your script",your_loadstring="Your full loadstring or raw URL")
+async def add_loadstring_cmd(interaction: discord.Interaction, script_name: str, your_loadstring: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Permission required: Administrator", ephemeral=True)
     await interaction.response.defer()
@@ -158,17 +152,16 @@ async def add_loadstring_cmd(interaction: discord.Interaction, script_name: str,
             user_url = your_loadstring.strip()
         else:
             return await interaction.followup.send("No valid URL found", ephemeral=True)
-    day_val = repeat_day.value
+    wrapped_ls, day_val = generate_wrapped_loadstring(user_url, script_name)
     day_name = DAY_NAMES[day_val]
     script_id = f"{script_name.replace(' ','_')}_{day_val}"
     LOADSTRING_SCHEDULES[script_id] = {"name": script_name,"user_url": user_url,"active_day": day_val}
-    wrapped_ls = generate_wrapped_loadstring(user_url, day_val, script_name)
     embed = discord.Embed(title=f"{script_name}", color=discord.Colour.teal())
     embed.add_field(name="Active Only", value=f"{day_name}s", inline=False)
-    embed.add_field(name="Protection", value="WRAPPED DAY-LOCKED\nBlocked on other days\nAuto-reactivates weekly", inline=False)
+    embed.add_field(name="Protection", value="WRAPPED DAY-LOCKED\nAuto-set to TODAY'S DAY\nBlocked on all other days\nAuto-reactivates weekly", inline=False)
     embed.add_field(name="Original URL", value=f"||{user_url}||", inline=False)
     embed.description = f"COPY THIS:\n```{wrapped_ls}```"
-    embed.set_footer(text=f"Runs ONLY on {day_name}s")
+    embed.set_footer(text=f"Auto-locked to {day_name}s — created today")
     await interaction.followup.send(embed=embed)
 
 @bot.command(name='cmds')
@@ -176,7 +169,7 @@ async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
     e.add_field(name="Prefix",value="`.d <link>` Deobfuscate\n`.cmds` Show commands",inline=False)
-    e.add_field(name="Slash",value="`/add_loadstring` Create day-locked script\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
+    e.add_field(name="Slash",value="`/add_loadstring` Auto-lock to TODAY'S DAY\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
     try: await ctx.message.delete()
     except: pass
