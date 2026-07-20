@@ -345,45 +345,56 @@ async def kick_user(interaction: discord.Interaction, user: discord.Member, reas
     reason="Optional: Reason for the mute"
 )
 async def mute_user(interaction: discord.Interaction, user: discord.Member, time: str = "", reason: str = ""):
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("Error: Missing permission - Manage Roles", ephemeral=True)
+    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
+        return await interaction.response.send_message("Error: Missing permission - Manage Roles / Moderate Members", ephemeral=True)
     if user.top_role >= interaction.user.top_role and interaction.user.id != interaction.guild.owner_id:
         return await interaction.response.send_message("Error: Cannot mute user with higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot mute yourself", ephemeral=True)
     
-    mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
-    if not mute_role:
-        mute_role = await interaction.guild.create_role(name="Muted")
-        for channel in interaction.guild.channels:
-            await channel.set_permissions(mute_role, send_messages=False, speak=False)
-    
-    if mute_role in user.roles:
-        return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
-    
     mute_reason = reason if reason else "No reason provided"
     duration = parse_time(time)
     
-    await user.add_roles(mute_role, reason=mute_reason)
-    
+    # Use Discord's built-in TIMEOUT feature
     if duration:
-        await interaction.response.send_message(f"Success: Muted {user.mention} for {time} | Reason: {mute_reason}")
-        await asyncio.sleep(duration)
-        if mute_role in user.roles:
-            await user.remove_roles(mute_role, reason="Mute duration expired")
+        try:
+            await user.timeout(discord.utils.utcnow() + discord.utils.timedelta(seconds=duration), reason=mute_reason)
+            await interaction.response.send_message(f"Success: Timed out {user.mention} for **{time}** | Reason: {mute_reason}")
+        except Exception as e:
+            return await interaction.response.send_message(f"Error: Could not timeout user - {str(e)}", ephemeral=True)
     else:
-        await interaction.response.send_message(f"Success: Muted {user.mention} permanently | Reason: {mute_reason}")
+        # Permanent mute using role
+        mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
+        if not mute_role:
+            mute_role = await interaction.guild.create_role(name="Muted")
+            for channel in interaction.guild.channels:
+                await channel.set_permissions(mute_role, send_messages=False, speak=False)
+        
+        if mute_role in user.roles:
+            return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
+        
+        await user.add_roles(mute_role, reason=mute_reason)
+        await interaction.response.send_message(f"Success: Muted {user.mention} **permanently** | Reason: {mute_reason}")
 
 @tree.command(name="unmute", description="Unmute a user")
 @app_commands.describe(user="Required: User to unmute")
 async def unmute_user(interaction: discord.Interaction, user: discord.Member):
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("Error: Missing permission - Manage Roles", ephemeral=True)
+    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
+        return await interaction.response.send_message("Error: Missing permission - Manage Roles / Moderate Members", ephemeral=True)
+    
+    # Remove Discord timeout
+    try:
+        await user.timeout(None)
+    except:
+        pass
+    
+    # Remove Muted role
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
-    if not mute_role or mute_role not in user.roles:
-        return await interaction.response.send_message("Error: User is not muted", ephemeral=True)
-    await user.remove_roles(mute_role)
-    await interaction.response.send_message(f"Success: Unmuted {user.mention}")
+    if mute_role and mute_role in user.roles:
+        await user.remove_roles(mute_role)
+        await interaction.response.send_message(f"Success: Unmuted {user.mention}")
+    else:
+        await interaction.response.send_message(f"Success: Removed timeout from {user.mention}")
 
 @bot.event
 async def on_ready():
