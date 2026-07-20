@@ -54,7 +54,7 @@ class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
             embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
             embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
             embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
-            embed.set_footer(text="Use /panel to open Control Panel")
+            embed.set_footer(text="Use /panel to see your updated status")
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
@@ -105,7 +105,7 @@ async def panel(interaction: discord.Interaction):
         embed.add_field(name="🔒 Access Restricted", value="Click [🔑 Redeem Key] below to unlock all features.", inline=False)
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
     embed.set_footer(text=f"User: {interaction.user.name} | Control Panel System")
-    view = PanelButtons(verified, user_id)
+    view = PanelButtons()
     await interaction.response.send_message(embed=embed, view=view)
 
 @tree.command(name="redeem", description="Redeem your key to unlock access")
@@ -117,7 +117,7 @@ async def redeem(interaction: discord.Interaction, key: str):
         embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
         embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
-        embed.set_footer(text="Use /panel to open Control Panel")
+        embed.set_footer(text="Use /panel to see your updated status")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
@@ -128,7 +128,7 @@ async def redeem(interaction: discord.Interaction, key: str):
 async def reset_hwid(interaction: discord.Interaction):
     user_id = interaction.user.id
     if not is_verified(user_id):
-        return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
+        return await interaction.response.send_message("❌ Not verified! Redeem your key first.", ephemeral=True)
     new_hwid = get_hwid(random.randint(1000000000, 9999999999))
     USER_DATA[user_id]["hwid"] = new_hwid
     embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
@@ -139,7 +139,7 @@ async def reset_hwid(interaction: discord.Interaction):
 async def get_script(interaction: discord.Interaction, name: str=None):
     user_id = interaction.user.id
     if not is_verified(user_id):
-        return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
+        return await interaction.response.send_message("❌ Not verified! Redeem your key first.", ephemeral=True)
     if not name:
         return await interaction.response.send_message(f"❌ Usage: /get_script [name] | Available: {', '.join(SCRIPTS.keys()) or 'None'}", ephemeral=True)
     if name in SCRIPTS:
@@ -160,20 +160,18 @@ async def add_script(interaction: discord.Interaction, name: str, code: str):
     await interaction.response.send_message(f"✅ Script `{name}` saved!", ephemeral=True)
 
 class PanelButtons(ui.View):
-    def __init__(self, verified, user_id):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.verified = verified
-        self.user_id = user_id
 
     @ui.button(label="🔑 Redeem Key", style=ButtonStyle.primary)
     async def redeem_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.verified:
-            return await interaction.response.send_message("✅ You are already verified!", ephemeral=True)
+        if is_verified(interaction.user.id):
+            return await interaction.response.send_message("✅ You are already verified! Close this panel and type `/panel` again to see your updated status.", ephemeral=True)
         await interaction.response.send_modal(RedeemModal())
 
     @ui.button(label="📜 Get Loadstring", style=ButtonStyle.success)
     async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.verified:
+        if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
         if SCRIPTS:
             embed = Embed(title="📜 AVAILABLE SCRIPTS", color=Colour.blue())
@@ -185,10 +183,10 @@ class PanelButtons(ui.View):
 
     @ui.button(label="🔄 Reset HWID", style=ButtonStyle.secondary)
     async def reset_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.verified:
+        if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
         new_hwid = get_hwid(random.randint(1000000000, 9999999999))
-        USER_DATA[self.user_id]["hwid"] = new_hwid
+        USER_DATA[interaction.user.id]["hwid"] = new_hwid
         embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
         embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
