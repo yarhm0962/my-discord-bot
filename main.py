@@ -18,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
-tree = app_commands.CommandTree(bot)
+tree = bot.tree
 
 USER_DATA = {}
 VALID_KEYS = {}
