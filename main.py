@@ -205,7 +205,7 @@ class CloseTicketView(discord.ui.View):
 async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = ""):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission required", ephemeral=True)
-    panel_description = description if description else "CREATE A TICKET BELOW"
+    panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     TICKET_SETTINGS[interaction.channel.id] = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
@@ -224,9 +224,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             staff_role = guild.get_role(settings["admin_role_id"])
             if not ticket_category or not staff_role:
                 return await btn_interaction.response.send_message("Error: Category or Admin Role not found", ephemeral=True)
-            TICKET_COUNT[btn_interaction.user.id] = TICKET_COUNT.get(btn_interaction.user.id, 0) + 1
-            ticket_number = TICKET_COUNT[btn_interaction.user.id]
-            channel_name = f"ticket-{btn_interaction.user.name}-{ticket_number}"
+            channel_name = f"{btn_interaction.user.name}-ticket"
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 btn_interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
@@ -239,9 +237,8 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
                 "creator_id": btn_interaction.user.id,
                 "category_id": category.id
             }
-            ticket_embed = discord.Embed(title="Ticket Created", color=discord.Colour.green())
+            ticket_embed = discord.Embed(title="Ticket Created", description="**Just wait for a staff to notice you**", color=discord.Colour.green())
             ticket_embed.add_field(name="Created By", value=btn_interaction.user.mention, inline=False)
-            ticket_embed.add_field(name="Ticket Number", value=f"#{ticket_number}", inline=False)
             ticket_embed.add_field(name="Staff", value=staff_role.mention, inline=False)
             ticket_embed.add_field(name="Access", value="Only you and staff can see this ticket", inline=False)
             ticket_embed.add_field(name="Actions", value="Click Close Ticket to close this channel", inline=False)
