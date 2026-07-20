@@ -1,12 +1,11 @@
 from flask import Flask
 from threading import Thread
 import os
-import hashlib
-import random
-import string
+import re
+import base64
 import aiohttp
 import discord
-from discord import app_commands, ui, ButtonStyle, Embed, Colour
+from discord import app_commands, File
 from discord.ext import commands
 
 app = Flask('')
@@ -18,194 +17,102 @@ def keep_alive(): Thread(target=run).start()
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
-USER_DATA = {}
-VALID_KEYS = {}
-SCRIPTS = {}
+def extract_url(text):
+    patterns = [
+        r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
+        r'http\.get\s*\(\s*["\']([^"\']+)["\']',
+        r'loadstring\s*\(\s*game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
+        r'loadstring\s*\(\s*http\.get\s*\(\s*["\']([^"\']+)["\']',
+        r'["\'](https?://[^"\']+)["\']'
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            return m.group(1)
+    return text.strip() if text.strip().startswith(('http://', 'https://')) else None
 
-def generate_key():
-    part1 = ''.join(random.choices(string.ascii_uppercase, k=3))
-    part2 = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    part3 = ''.join(random.choices(string.ascii_uppercase, k=3))
-    return f"KEY-{part1}-{part2}-{part3}"
+def try_decode(code):
+    if not code: return "Error: Empty code"
+    original = code
+    code = code.strip()
+    b64_patterns = [
+        r'loadstring\s*\(\s*base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
+        r'base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
+        r'["\']([A-Za-z0-9+/=]{20,})["\']'
+    ]
+    for pat in b64_patterns:
+        m = re.search(pat, code)
+        if m:
+            try:
+                decoded = base64.b64decode(m.group(1)).decode('utf-8', errors='ignore')
+                if decoded and len(decoded) > 10:
+                    code = decoded
+            except: pass
+    m = re.match(r'^loadstring\s*\(\s*(.+)\s*\)\s*\([^)]*\)?\s*$', code.strip(), re.DOTALL)
+    if m:
+        inner = m.group(1).strip()
+        if not inner.startswith('game:HttpGet'):
+            code = inner
+    return code if code else original
 
-def get_hwid(user_id):
-    return hashlib.md5(str(user_id).encode()).hexdigest()[:16].upper()
-
-def is_verified(user_id):
-    return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
-
-# ✅ REAL WORKING LINK CREATION
-async def create_paste(code):
-    path = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
+async def deobfuscate_from_url(url):
     try:
+        if "rentry.co" in url and "/raw/" not in url:
+            url = url.replace("rentry.co/", "rentry.co/raw/")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            async with session.post(
-                "https://rentry.co/api/new",
-                data={"text": code, "url": path, "edit_code": path, "json": "1"},
-                timeout=30
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("status") == "ok":
-                        # ✅ STORE REAL WORKING LINK
-                        return f"https://rentry.co/raw/{path}"
+            async with session.get(url, timeout=30, allow_redirects=True) as resp:
+                if resp.status != 200:
+                    return None, f"HTTP Error: Status {resp.status}"
+                code = await resp.text()
+                if not code or len(code) < 5:
+                    return None, "Error: Empty response from URL"
+                deobf = try_decode(code)
+                return deobf, None
     except Exception as e:
-        print(f"Error: {e}")
-    return None
+        return None, f"Fetch Error: {str(e)[:80]}"
 
-class RedeemModal(ui.Modal, title="Redeem Key"):
-    key_input = ui.TextInput(label="Enter your key", placeholder="Paste your key here", required=True, min_length=10, max_length=30)
-    async def on_submit(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        key = str(self.key_input).strip()
-        hwid = get_hwid(user_id)
-        if key in VALID_KEYS:
-            USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
-            embed = Embed(title="Success", description="Key redeemed successfully", color=Colour.green())
-            embed.add_field(name="Your Key", value=f"`{key}`", inline=False)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            embed = Embed(title="Error", description="Invalid key. Check and try again.", color=Colour.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+@bot.command(name='d')
+async def deobf_prefix(ctx, *, link: str):
+    if ctx.author.bot: return
+    status_msg = await ctx.send("Processing...")
+    url = extract_url(link)
+    if not url:
+        return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
+    deobf_code, error = await deobfuscate_from_url(url)
+    if error:
+        return await status_msg.edit(content=f"Error: {error}")
+    filename = f"deobfuscated_{ctx.message.id}.lua"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(deobf_code)
+    await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
+    await ctx.send(file=File(filename))
+    os.remove(filename)
+
+@tree.command(name="deobf-file", description="Upload a .lua file to deobfuscate")
+@app_commands.describe(file="Upload your obfuscated .lua file")
+async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment):
+    if not file.filename.endswith('.lua'):
+        return await interaction.response.send_message("Error: Please upload a .lua file", ephemeral=True)
+    await interaction.response.defer()
+    try:
+        content = (await file.read()).decode('utf-8', errors='ignore')
+    except Exception as e:
+        return await interaction.followup.send(f"Error: Could not read file - {str(e)}", ephemeral=True)
+    deobf_code = try_decode(content)
+    filename = f"deobfuscated_{interaction.id}.lua"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(deobf_code)
+    await interaction.followup.send(content="Success: File deobfuscated successfully", file=File(filename))
+    os.remove(filename)
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="/panel"))
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
-
-@tree.command(name="generate-key", description="Generate a new access key")
-async def genkey(interaction: discord.Interaction, count: int=1):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Permission denied", ephemeral=True)
-    count = max(1, min(count, 10))
-    new_keys = []
-    for _ in range(count):
-        key = generate_key()
-        VALID_KEYS[key] = "active"
-        new_keys.append(f"`{key}`")
-    embed = Embed(title="Keys Generated", description="\n".join(new_keys), color=Colour.green())
-    embed.add_field(name="Format", value="KEY-XXX-XXXX-XXX", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@tree.command(name="panel", description="Add script or open control panel")
-@app_commands.describe(
-    script_name="Name of your script",
-    code="Paste your Lua code",
-    file="Upload your .lua file"
-)
-async def panel(interaction: discord.Interaction, script_name: str="", code: str="", file: discord.Attachment=None):
-    user_id = interaction.user.id
-
-    # === ADD SCRIPT MODE ===
-    if script_name:
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Permission denied", ephemeral=True)
-
-        if not file and not code.strip():
-            return await interaction.response.send_message(
-                "Error: Provide either file or code.\n\nUsage:\n/panel script_name:MyScript file:script.lua\n/panel script_name:MyScript code:print('hello')",
-                ephemeral=True
-            )
-
-        await interaction.response.defer(ephemeral=True)
-
-        if file:
-            try: script_code = (await file.read()).decode('utf-8')
-            except: return await interaction.followup.send("Error: Failed to read file", ephemeral=True)
-        else:
-            script_code = code.strip()
-
-        paste_url = await create_paste(script_code)
-        if not paste_url:
-            return await interaction.followup.send("Error: Failed to create link. Try again.", ephemeral=True)
-
-        SCRIPTS[script_name] = paste_url
-        embed = Embed(title="Script Added Successfully", color=Colour.green())
-        embed.add_field(name="Script Name", value=script_name, inline=False)
-        embed.add_field(name="Working Link", value=f"`{paste_url}`", inline=False)
-        embed.add_field(name="Next Step", value="Open /panel → Click Get Loadstring", inline=False)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
-
-    # === OPEN PANEL MODE (when script_name is empty) ===
-    verified = is_verified(user_id)
-    embed = Embed(title="Control Panel", color=Colour.green() if verified else Colour.red())
-    if verified:
-        user_key = USER_DATA[user_id]["key"]
-        embed.add_field(name="Status", value="Verified - Full Access", inline=False)
-        embed.add_field(name="Your Key", value=f"`{user_key}`", inline=False)
-        embed.add_field(name="Scripts Available", value=str(len(SCRIPTS)), inline=False)
-    else:
-        embed.add_field(name="Status", value="Not Verified - Redeem key to unlock", inline=False)
-    await interaction.response.send_message(embed=embed, view=PanelButtons(), ephemeral=False)
-
-@tree.command(name="redeem-key", description="Redeem your access key")
-async def redeem(interaction: discord.Interaction, key: str):
-    key = key.strip()
-    user_id = interaction.user.id
-    hwid = get_hwid(user_id)
-    if key in VALID_KEYS:
-        USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
-        embed = Embed(title="Success", description="Key redeemed successfully", color=Colour.green())
-        embed.add_field(name="Your Key", value=f"`{key}`", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    else:
-        embed = Embed(title="Error", description="Invalid key. Check and try again.", color=Colour.red())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@tree.command(name="reset-hardware-id", description="Reset your hardware id")
-async def reset_hwid(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    if not is_verified(user_id):
-        return await interaction.response.send_message("Error: Redeem key first", ephemeral=True)
-    new_hwid = get_hwid(random.randint(1000000000, 9999999999))
-    USER_DATA[user_id]["hwid"] = new_hwid
-    embed = Embed(title="Hardware ID Reset", color=Colour.blue())
-    embed.add_field(name="New Hardware ID", value=f"`{new_hwid}`", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class PanelButtons(ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @ui.button(label="Redeem Key", style=ButtonStyle.primary)
-    async def redeem_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if is_verified(interaction.user.id):
-            return await interaction.response.send_message("Already verified. Reopen panel.", ephemeral=True)
-        await interaction.response.send_modal(RedeemModal())
-
-    @ui.button(label="Get Loadstring", style=ButtonStyle.success)
-    async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_verified(interaction.user.id):
-            return await interaction.response.send_message("Error: Redeem key first", ephemeral=True)
-        if not SCRIPTS:
-            return await interaction.response.send_message("Error: No scripts available. Add one first.", ephemeral=True)
-        user_key = USER_DATA[interaction.user.id]["key"]
-        output = "Your Working Loadstring:\n```lua\n"
-        for name, url in SCRIPTS.items():
-            output += f"-- {name}\n"
-            output += f'getgenv().SCRIPT_KEY = "{user_key}"\n'
-            output += f'loadstring(game:HttpGet("{url}"))()\n\n'
-        output += "```\nCopy everything and paste into your executor."
-        await interaction.response.send_message(output, ephemeral=True)
-
-    @ui.button(label="Reset Hardware ID", style=ButtonStyle.secondary)
-    async def reset_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_verified(interaction.user.id):
-            return await interaction.response.send_message("Error: Redeem key first", ephemeral=True)
-        new_hwid = get_hwid(random.randint(1000000000, 9999999999))
-        USER_DATA[interaction.user.id]["hwid"] = new_hwid
-        embed = Embed(title="Hardware ID Reset", color=Colour.blue())
-        embed.add_field(name="New Hardware ID", value=f"`{new_hwid}`", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @ui.button(label="Close", style=ButtonStyle.danger)
-    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.message.delete()
 
 keep_alive()
 TOKEN = os.getenv('TOKEN')
