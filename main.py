@@ -5,7 +5,7 @@ import hashlib
 import random
 import string
 import discord
-from discord import ui, ButtonStyle, Embed, Colour
+from discord import app_commands, ui, ButtonStyle, Embed, Colour
 from discord.ext import commands
 
 app = Flask('')
@@ -16,7 +16,16 @@ def keep_alive(): Thread(target=run).start()
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+class Bot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix='!', intents=intents, help_command=None)
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+
+bot = Bot()
 
 USER_DATA = {}
 VALID_KEYS = {}
@@ -37,11 +46,12 @@ def is_verified(user_id: int) -> bool:
 @bot.event
 async def on_ready():
     print(f'✅ Logged in as {bot.user}')
-    await bot.change_presence(activity=discord.Game(name="!panel | Key System"))
+    await bot.change_presence(activity=discord.Game(name="/panel | Control Panel"))
+    await bot.tree.sync()
 
-@bot.command(name='genkey')
-@commands.has_permissions(administrator=True)
-async def gen_key(ctx, count: int=1):
+@bot.tree.command(name="genkey", description="Generate a new key (Admin only)")
+@app_commands.checks.has_permissions(administrator=True)
+async def genkey(interaction: discord.Interaction, count: int=1):
     if count < 1: count = 1
     if count > 10: count = 10
     new_keys = []
@@ -52,82 +62,83 @@ async def gen_key(ctx, count: int=1):
     embed = Embed(title="✅ KEY(S) GENERATED!", color=Colour.green())
     embed.description = "\n".join(new_keys)
     embed.add_field(name="Format", value="`KEY-XXX-XXXX-XXX`", inline=False)
-    embed.set_footer(text="Use !key YOUR-KEY to activate")
-    await ctx.send(embed=embed)
+    embed.set_footer(text="Use /redeem to activate your key")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.command(name='key')
-async def activate_key(ctx, key_input: str=None):
-    if not key_input:
-        return await ctx.send("❌ **Usage:** `!key YOUR-KEY-HERE`")
-    user_id = ctx.author.id
-    hwid = get_hwid(user_id)
-    if key_input in VALID_KEYS:
-        USER_DATA[user_id] = {
-            "key": key_input,
-            "hwid": hwid,
-            "verified": True
-        }
-        embed = Embed(title="✅ KEY ACTIVATED SUCCESSFULLY!", color=Colour.green())
-        embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
-        embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
-        embed.set_footer(text="Use !panel to open Control Panel")
-        await ctx.send(embed=embed)
-    else:
-        embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
-        embed.description = "Key not recognized. Ask an admin to generate one."
-        await ctx.send(embed=embed)
-
-@bot.command(name='panel')
-async def panel(ctx):
-    user_id = ctx.author.id
+@bot.tree.command(name="panel", description="Open Control Panel")
+async def panel(interaction: discord.Interaction):
+    user_id = interaction.user.id
     verified = is_verified(user_id)
     embed = Embed(
-        title="🔐 M1RAGE CONTROL PANEL",
-        description="✅ **VERIFIED — Full Access**" if verified else "❌ **NOT VERIFIED — Use !key to activate**",
+        title="🔐 CONTROL PANEL",
+        description="Welcome to your personal Control Panel. Manage your access, view your HWID, and retrieve your scripts & loadstrings all in one place.",
         color=Colour.green() if verified else Colour.red()
     )
     if verified:
         hwid = USER_DATA[user_id]["hwid"]
-        embed.add_field(name="🔑 Status", value="✅ Active & Verified", inline=False)
-        embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
+        embed.add_field(name="🔑 Status", value="✅ Verified — Full Access Granted", inline=False)
+        embed.add_field(name="💻 HWID", value=f"`{hwid}`", inline=False)
         embed.add_field(name="📜 Scripts", value=f"{len(SCRIPTS)} scripts available", inline=False)
-        embed.add_field(name="⚙️ Commands", value="`!hwid` - Show HWID\n`!script NAME` - Get Loadstring", inline=False)
     else:
-        embed.add_field(name="🔒 Access Locked", value="Use `!key YOUR-KEY` to unlock panel", inline=False)
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.add_field(name="🔒 Access Restricted", value="Redeem a valid key to unlock all features.", inline=False)
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.set_footer(text=f"User: {interaction.user.name} | Control Panel System")
     view = PanelButtons(verified, user_id)
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-@bot.command(name='hwid')
-async def show_hwid(ctx):
-    if not is_verified(ctx.author.id):
-        return await ctx.send("❌ **Not verified!** Use `!key YOUR-KEY` first")
-    hwid = USER_DATA[ctx.author.id]["hwid"]
-    embed = Embed(title="💻 YOUR HWID", color=Colour.blue())
-    embed.description = f"```\n{hwid}\n```"
-    await ctx.send(embed=embed)
+@bot.tree.command(name="redeem", description="Redeem your key to unlock access")
+async def redeem(interaction: discord.Interaction, key: str):
+    user_id = interaction.user.id
+    hwid = get_hwid(user_id)
+    if key in VALID_KEYS:
+        USER_DATA[user_id] = {
+            "key": key,
+            "hwid": hwid,
+            "verified": True
+        }
+        embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
+        embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
+        embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
+        embed.set_footer(text="Use /panel to open Control Panel")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
+        embed.description = "The key you entered is not recognized. Please check your key and try again."
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.command(name='script')
-async def get_script(ctx, name: str=None):
-    if not is_verified(ctx.author.id):
-        return await ctx.send("❌ **Not verified!** Use `!key YOUR-KEY` first")
+@bot.tree.command(name="reset_hwid", description="Reset your HWID")
+async def reset_hwid(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    if not is_verified(user_id):
+        return await interaction.response.send_message("❌ You are not verified! Use /redeem first.", ephemeral=True)
+    new_hwid = get_hwid(random.randint(1000000000, 9999999999))
+    USER_DATA[user_id]["hwid"] = new_hwid
+    embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
+    embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="get_script", description="Get your script loadstring")
+async def get_script(interaction: discord.Interaction, name: str=None):
+    user_id = interaction.user.id
+    if not is_verified(user_id):
+        return await interaction.response.send_message("❌ You are not verified! Use /redeem first.", ephemeral=True)
     if not name:
-        return await ctx.send(f"❌ Usage: `!script NAME` | Available: {', '.join(SCRIPTS.keys()) or 'None'}")
+        return await interaction.response.send_message(f"❌ Usage: /get_script [name] | Available: {', '.join(SCRIPTS.keys()) or 'None'}", ephemeral=True)
     if name in SCRIPTS:
         code = SCRIPTS[name]
-        loadstring = f"loadstring(game:HttpGet('PASTE-YOUR-URL-HERE'))()"
+        loadstring = "loadstring(game:HttpGet('PASTE-YOUR-URL-HERE'))()"
         embed = Embed(title=f"📜 SCRIPT: {name}", color=Colour.purple())
         embed.add_field(name="🔗 Loadstring", value=f"```lua\n{loadstring}\n```", inline=False)
         embed.add_field(name="📄 Code", value=f"```lua\n{code[:800]}\n```", inline=False)
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
-        await ctx.send(f"❌ Script `{name}` not found!")
+        await interaction.response.send_message(f"❌ Script `{name}` not found!", ephemeral=True)
 
-@bot.command(name='addscript')
-@commands.has_permissions(administrator=True)
-async def add_script(ctx, name: str, *, code: str):
+@bot.tree.command(name="add_script", description="Add a new script (Admin only)")
+@app_commands.checks.has_permissions(administrator=True)
+async def add_script(interaction: discord.Interaction, name: str, code: str):
     SCRIPTS[name] = code
-    await ctx.send(f"✅ Script `{name}` saved!")
+    await interaction.response.send_message(f"✅ Script `{name}` saved!", ephemeral=True)
 
 class PanelButtons(ui.View):
     def __init__(self, verified, user_id):
@@ -135,35 +146,32 @@ class PanelButtons(ui.View):
         self.verified = verified
         self.user_id = user_id
 
-    @ui.button(label="📜 Scripts", style=ButtonStyle.primary)
-    async def scripts_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @ui.button(label="🔑 Redeem Key", style=ButtonStyle.primary)
+    async def redeem_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.verified:
+            return await interaction.response.send_message("✅ You are already verified!", ephemeral=True)
+        await interaction.response.send_message("👉 Use `/redeem your-key-here` to activate your access!", ephemeral=True)
+
+    @ui.button(label="📜 Get Loadstring", style=ButtonStyle.success)
+    async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.verified:
-            return await interaction.response.send_message("❌ Not verified! Use `!key` first", ephemeral=True)
-        embed = Embed(title="📜 AVAILABLE SCRIPTS", color=Colour.blue())
+            return await interaction.response.send_message("❌ Not verified! Use `/redeem` first.", ephemeral=True)
         if SCRIPTS:
+            embed = Embed(title="📜 AVAILABLE SCRIPTS", color=Colour.blue())
             for name in SCRIPTS:
-                embed.add_field(name=f"• {name}", value=f"`!script {name}`", inline=False)
+                embed.add_field(name=f"• {name}", value=f"Use `/get_script {name}`", inline=False)
         else:
-            embed.description = "No scripts added yet! Admin use `!addscript`"
+            embed = Embed(title="📜 SCRIPTS", description="No scripts added yet. Admin use `/add_script`", color=Colour.orange())
         await interaction.response.edit_message(embed=embed)
 
-    @ui.button(label="💻 My HWID", style=ButtonStyle.secondary)
-    async def hwid_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @ui.button(label="🔄 Reset HWID", style=ButtonStyle.secondary)
+    async def reset_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.verified:
-            return await interaction.response.send_message("❌ Not verified! Use `!key` first", ephemeral=True)
-        hwid = USER_DATA[self.user_id]["hwid"]
-        embed = Embed(title="💻 YOUR HWID", color=Colour.green())
-        embed.description = f"```\n{hwid}\n```"
-        await interaction.response.edit_message(embed=embed)
-
-    @ui.button(label="🔑 Status", style=ButtonStyle.success)
-    async def status_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.verified:
-            return await interaction.response.send_message("❌ Not verified! Use `!key` first", ephemeral=True)
-        embed = Embed(title="✅ ACCOUNT STATUS", color=Colour.green())
-        embed.add_field(name="Verification", value="✅ Verified", inline=False)
-        embed.add_field(name="HWID Locked", value="✅ Yes", inline=False)
-        embed.add_field(name="Access Level", value="🔓 Premium", inline=False)
+            return await interaction.response.send_message("❌ Not verified! Use `/redeem` first.", ephemeral=True)
+        new_hwid = get_hwid(random.randint(1000000000, 9999999999))
+        USER_DATA[self.user_id]["hwid"] = new_hwid
+        embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
+        embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
         await interaction.response.edit_message(embed=embed)
 
     @ui.button(label="❌ Close", style=ButtonStyle.danger)
