@@ -25,6 +25,7 @@ tree = bot.tree
 TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300
+WARNING_EXPIRE_MINUTES = 10
 LOADSTRING_SCHEDULES = {}
 
 async def upload_to_pastefy(content):
@@ -114,24 +115,42 @@ async def deobfuscate_from_url(url):
                 return (smart_decode(c),None)if c and len(c)>4 else (None,"Empty response")
     except Exception as e: return None,f"Fetch Error: {str(e)[:80]}"
 
+def clean_expired_warnings(gid, uid):
+    if gid not in WARNINGS or uid not in WARNINGS[gid]: return
+    data = WARNINGS[gid][uid]
+    if type(data) is dict and (datetime.utcnow() - data["time"]).total_seconds() > WARNING_EXPIRE_MINUTES * 60:
+        del WARNINGS[gid][uid]
+        return True
+    return False
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild: return await bot.process_commands(message)
     highest_role = max(message.guild.roles, key=lambda r: r.position)
     mentioned_highest = (highest_role in message.role_mentions) or any(highest_role in u.roles for u in message.mentions)
+    
     if mentioned_highest:
-        gid, uid = str(message.guild.id), str(message.author.id)
+        gid = str(message.guild.id)
+        uid = str(message.author.id)
+        
         if gid not in WARNINGS: WARNINGS[gid] = {}
-        if uid not in WARNINGS[gid]: WARNINGS[gid][uid] = 0
-        WARNINGS[gid][uid] += 1
-        count = WARNINGS[gid][uid]
+        clean_expired_warnings(gid, uid)
+        
+        if uid not in WARNINGS[gid]:
+            WARNINGS[gid][uid] = {"count": 1, "time": datetime.utcnow()}
+        else:
+            WARNINGS[gid][uid]["count"] += 1
+            WARNINGS[gid][uid]["time"] = datetime.utcnow()
+        
+        count = WARNINGS[gid][uid]["count"]
+        
         if count == 1:
             e = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
-            e.description = f"{message.author.mention}, please do not mention the highest role."
+            e.description = f"{message.author.mention}, please do not mention the highest role.\n⚠️ Warnings auto-reset after {WARNING_EXPIRE_MINUTES} minutes."
             await message.channel.send(embed=e)
         elif count == 2:
             e = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
-            e.description = f"{message.author.mention}, one more warning and you will be timed out."
+            e.description = f"{message.author.mention}, one more warning and you will be timed out.\n⚠️ Warnings auto-reset after {WARNING_EXPIRE_MINUTES} minutes."
             await message.channel.send(embed=e)
         elif count >= 3:
             try:
@@ -139,9 +158,10 @@ async def on_message(message):
                 await message.author.timeout(until, reason="Mentioned highest role repeatedly")
             except: pass
             e = discord.Embed(title="🔒 Warning 3/3 — Timed Out!", color=discord.Colour.red())
-            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n**Warnings frozen at 3 — no more counting.**"
+            e.description = f"{message.author.mention} has been timed out for 5 minutes.\n✅ **Warnings RESET TO 0 after timeout!**"
             await message.channel.send(embed=e)
-            WARNINGS[gid][uid] = 3
+            del WARNINGS[gid][uid]
+    
     await bot.process_commands(message)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (PASTEFY)")
