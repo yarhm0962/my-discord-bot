@@ -6,6 +6,7 @@ import base64
 import aiohttp
 import asyncio
 import discord
+from datetime import timedelta
 from discord import app_commands, File
 from discord.ext import commands
 
@@ -355,15 +356,13 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
     mute_reason = reason if reason else "No reason provided"
     duration = parse_time(time)
     
-    # Use Discord's built-in TIMEOUT feature
     if duration:
         try:
-            await user.timeout(discord.utils.utcnow() + discord.utils.timedelta(seconds=duration), reason=mute_reason)
+            await user.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=mute_reason)
             await interaction.response.send_message(f"Success: Timed out {user.mention} for **{time}** | Reason: {mute_reason}")
         except Exception as e:
             return await interaction.response.send_message(f"Error: Could not timeout user - {str(e)}", ephemeral=True)
     else:
-        # Permanent mute using role
         mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
         if not mute_role:
             mute_role = await interaction.guild.create_role(name="Muted")
@@ -382,13 +381,11 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
     if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
         return await interaction.response.send_message("Error: Missing permission - Manage Roles / Moderate Members", ephemeral=True)
     
-    # Remove Discord timeout
     try:
         await user.timeout(None)
     except:
         pass
     
-    # Remove Muted role
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if mute_role and mute_role in user.roles:
         await user.remove_roles(mute_role)
