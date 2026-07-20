@@ -30,8 +30,7 @@ async def upload_to_pastes_dev(content):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(
                 "https://api.pastes.dev/post",
-                data=content,
-                headers={"Content-Type": "text/plain"}
+                data=content
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
