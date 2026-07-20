@@ -6,7 +6,7 @@ import random
 import string
 import discord
 import aiohttp
-from discord import app_commands, ui, ButtonStyle, Embed, Colour, File
+from discord import app_commands, ui, ButtonStyle, Embed, Colour
 from discord.ext import commands
 
 app = Flask('')
@@ -39,31 +39,21 @@ def is_verified(user_id):
 
 async def create_paste(code):
     url = "https://rentry.co/api/new"
-    chars = string.ascii_uppercase + string.digits
-    suffix = ''.join(random.choice(chars) for _ in range(8))
-    payload = {
-        "text": code,
-        "url": suffix,
-        "edit_code": suffix,
-        "json": "1"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=payload) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("status") == "ok":
-                    return f"https://rentry.co/raw/{suffix}"
+    suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    payload = {"text": code, "url": suffix, "edit_code": suffix, "json": "1"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.post(url, data=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("status") == "ok":
+                        return f"https://rentry.co/raw/{suffix}"
+    except:
+        return None
     return None
 
 class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
-    key_input = ui.TextInput(
-        label="Key to Redeem",
-        placeholder="Enter your key...",
-        required=True,
-        min_length=10,
-        max_length=20
-    )
-
+    key_input = ui.TextInput(label="Key to Redeem", placeholder="Enter your key...", required=True, min_length=10, max_length=20)
     async def on_submit(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         key = str(self.key_input).strip()
@@ -76,7 +66,7 @@ class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
-            embed.description = "The key you entered is not recognized. Please check your key and try again."
+            embed.description = "Key not recognized. Check and try again."
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
@@ -89,71 +79,68 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Sync: {e}")
 
-@tree.command(name="genkey", description="Generate a new key (Admin only)")
+@tree.command(name="genkey", description="Generate key (Admin only)")
 async def genkey(interaction: discord.Interaction, count: int=1):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
     count = max(1, min(count, 10))
-    new_keys = []
-    for _ in range(count):
-        key = generate_key()
-        VALID_KEYS[key] = "premium"
-        new_keys.append(f"`{key}`")
+    new_keys = [f"`{generate_key()}`" for _ in range(count)]
     embed = Embed(title="✅ KEY(S) GENERATED!", color=Colour.green())
     embed.description = "\n".join(new_keys)
     embed.add_field(name="Format", value="`KEY-XXX-XXXX-XXX`", inline=False)
-    embed.set_footer(text="Click 🔑 Redeem Key on panel to activate")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@tree.command(name="add_script", description="Add new script (Admin only)")
-async def add_script(interaction: discord.Interaction, name: str, file: discord.Attachment=None, code: str=""):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    if file:
-        try:
-            content = await file.read()
-            script_code = content.decode('utf-8')
-        except:
-            return await interaction.followup.send("❌ Failed to read file! Upload a valid .lua file.", ephemeral=True)
-    elif code:
-        script_code = code
-    else:
-        return await interaction.followup.send("❌ Provide either a file OR code!", ephemeral=True)
-    
-    paste_url = await create_paste(script_code)
-    if not paste_url:
-        return await interaction.followup.send("❌ Failed to create link! Try again.", ephemeral=True)
-    
-    SCRIPTS[name] = paste_url
-    embed = Embed(title="✅ SCRIPT ADDED!", color=Colour.green())
-    embed.add_field(name="Script Name", value=name, inline=False)
-    embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
-    embed.add_field(name="📄 Source", value=f"File: {file.filename}" if file else "Code Text", inline=False)
-    embed.set_footer(text="Users get loadstring from /panel")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@tree.command(name="panel", description="Open Control Panel")
-async def panel(interaction: discord.Interaction):
+@tree.command(name="panel", description="Open Panel OR Add Script: /panel script_name: code: file:")
+@app_commands.describe(
+    script_name="Script name (leave empty to just open panel)",
+    code="Paste Lua code here",
+    file="Upload your .lua file here"
+)
+async def panel(interaction: discord.Interaction, script_name: str="", code: str="", file: discord.Attachment=None):
     user_id = interaction.user.id
+
+    # === ADD SCRIPT MODE ===
+    if script_name and (code or file):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+
+        if file:
+            try:
+                script_code = (await file.read()).decode('utf-8')
+            except:
+                return await interaction.followup.send("❌ Failed to read file! Use valid .lua file.", ephemeral=True)
+        else:
+            script_code = code
+
+        paste_url = await create_paste(script_code)
+        if not paste_url:
+            return await interaction.followup.send("❌ Failed to create link! Try again.", ephemeral=True)
+
+        SCRIPTS[script_name] = paste_url
+        embed = Embed(title="✅ SCRIPT ADDED SUCCESSFULLY!", color=Colour.green())
+        embed.add_field(name="📜 Script Name", value=script_name, inline=False)
+        embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
+        embed.add_field(name="📋 Loadstring", value=f"```lua\nloadstring(game:HttpGet(\"{paste_url}\"))()\n```", inline=False)
+        embed.set_footer(text="✅ Use /panel to get loadstring anytime")
+        return await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # === OPEN PANEL MODE ===
     verified = is_verified(user_id)
     embed = Embed(
         title="🔐 CONTROL PANEL",
-        description="Welcome to your Control Panel. Manage your access and retrieve your script loadstrings instantly.",
+        description="Welcome to your Control Panel. Manage access and get loadstrings instantly.",
         color=Colour.green() if verified else Colour.red()
     )
     if verified:
         embed.add_field(name="🔑 Status", value="✅ Verified — Full Access Granted", inline=False)
         embed.add_field(name="📜 Scripts Available", value=f"{len(SCRIPTS)} script(s)", inline=False)
     else:
-        embed.add_field(name="🔒 Access Restricted", value="Click [🔑 Redeem Key] below to unlock all features.", inline=False)
+        embed.add_field(name="🔒 Access Restricted", value="Click [🔑 Redeem Key] below to unlock.", inline=False)
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    view = PanelButtons()
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=PanelButtons(), ephemeral=False)
 
-@tree.command(name="redeem", description="Redeem your key to unlock access")
+@tree.command(name="redeem", description="Redeem your key")
 async def redeem(interaction: discord.Interaction, key: str):
     user_id = interaction.user.id
     hwid = get_hwid(user_id)
@@ -161,21 +148,20 @@ async def redeem(interaction: discord.Interaction, key: str):
         USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
         embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
-        embed.set_footer(text="Reopen /panel to see your access")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
-        embed.description = "The key you entered is not recognized. Please check your key and try again."
+        embed.description = "Key not recognized. Check and try again."
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="reset_hwid", description="Reset your HWID")
 async def reset_hwid(interaction: discord.Interaction):
     user_id = interaction.user.id
     if not is_verified(user_id):
-        return await interaction.response.send_message("❌ Not verified! Redeem your key first.", ephemeral=True)
+        return await interaction.response.send_message("❌ Redeem key first!", ephemeral=True)
     new_hwid = get_hwid(random.randint(1000000000, 9999999999))
     USER_DATA[user_id]["hwid"] = new_hwid
-    embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
+    embed = Embed(title="✅ HWID RESET!", color=Colour.blue())
     embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -186,28 +172,28 @@ class PanelButtons(ui.View):
     @ui.button(label="🔑 Redeem Key", style=ButtonStyle.primary)
     async def redeem_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if is_verified(interaction.user.id):
-            return await interaction.response.send_message("✅ Already verified! Reopen /panel to see your access.", ephemeral=True)
+            return await interaction.response.send_message("✅ Already verified! Reopen /panel.", ephemeral=True)
         await interaction.response.send_modal(RedeemModal())
 
     @ui.button(label="📜 Get Loadstring", style=ButtonStyle.success)
     async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_verified(interaction.user.id):
-            return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
+            return await interaction.response.send_message("❌ Redeem key first!", ephemeral=True)
         if not SCRIPTS:
-            return await interaction.response.send_message("❌ No scripts available yet. Admin use /add_script", ephemeral=True)
+            return await interaction.response.send_message("❌ No scripts yet. Admin use /panel script_name: file:", ephemeral=True)
         output = "📋 **YOUR WORKING LOADSTRING:**\n```lua\n"
         for name, url in SCRIPTS.items():
             output += f'-- {name}\nloadstring(game:HttpGet("{url}"))()\n\n'
-        output += "```\n✅ **COPY & EXECUTE DIRECTLY IN ROBLOX! LINK WORKS 100%!**"
+        output += "```\n✅ **COPY & EXECUTE IN ROBLOX!**"
         await interaction.response.send_message(output, ephemeral=True)
 
     @ui.button(label="🔄 Reset HWID", style=ButtonStyle.secondary)
     async def reset_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_verified(interaction.user.id):
-            return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
+            return await interaction.response.send_message("❌ Redeem key first!", ephemeral=True)
         new_hwid = get_hwid(random.randint(1000000000, 9999999999))
         USER_DATA[interaction.user.id]["hwid"] = new_hwid
-        embed = Embed(title="✅ HWID RESET SUCCESSFULLY!", color=Colour.blue())
+        embed = Embed(title="✅ HWID RESET!", color=Colour.blue())
         embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
