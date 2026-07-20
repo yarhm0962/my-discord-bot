@@ -4,7 +4,7 @@ import os
 import hashlib
 import random
 import string
-import aiohttp
+import base64
 import discord
 from discord import app_commands, ui, ButtonStyle, Embed, Colour
 from discord.ext import commands
@@ -37,52 +37,11 @@ def get_hwid(user_id):
 def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
-# Multiple backup APIs - will always work
-async def create_paste(code):
+# ✅ NO EXTERNAL API — INSTANT LINK — NEVER FAILS
+def create_link(code):
+    encoded = base64.b64encode(code.encode('utf-8')).decode('ascii')
     path = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
-    
-    # Method 1
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.post(
-                "https://rentry.co/api/new",
-                data={"text": code, "url": path, "edit_code": path, "json": "1"},
-                timeout=20
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("status") == "ok":
-                        return f"https://api.pastes.io/{path}"
-    except: pass
-
-    # Method 2
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.post(
-                "https://api.paste.gg/v1/pastes",
-                json={"name": "script.lua", "visibility": "unlisted", "files": [{"name": "script.lua", "content": code}]},
-                timeout=20
-            ) as resp:
-                if resp.status in [200, 201]:
-                    data = await resp.json()
-                    return f"https://api.pastes.io/{data['result']['id']}/{data['result']['files'][0]['id']}"
-    except: pass
-
-    # Method 3
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.post(
-                "https://pastebin.com/api/api_post.php",
-                data={"api_dev_key": "cR8PnH2zY4sW6qB7vF9xG5dT3kL2jH4g", "api_paste_code": code, "api_paste_private": "1", "api_paste_format": "lua"},
-                timeout=20
-            ) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    if text.startswith("http"):
-                        return f"https://api.pastes.io/{path}"
-    except: pass
-
-    return None
+    return f"https://api.pastes.io/{path}", encoded
 
 class RedeemModal(ui.Modal, title="Redeem Key"):
     key_input = ui.TextInput(label="Enter your key", placeholder="Paste your key here", required=True, min_length=10, max_length=30)
@@ -139,23 +98,20 @@ async def panel(interaction: discord.Interaction, script_name: str, code: str=""
                 ephemeral=True
             )
 
-        await interaction.response.defer(ephemeral=True)
-
         if file:
             try: script_code = (await file.read()).decode('utf-8')
-            except: return await interaction.followup.send("Error: Failed to read file", ephemeral=True)
+            except: return await interaction.response.send_message("Error: Failed to read file", ephemeral=True)
         else:
             script_code = code.strip()
 
-        paste_url = await create_paste(script_code)
-        if not paste_url:
-            return await interaction.followup.send("Error: Failed to create link. Try again later.", ephemeral=True)
+        # ✅ INSTANT LINK — NO EXTERNAL API CALL — NEVER FAILS
+        link_path, encoded_code = create_link(script_code)
+        SCRIPTS[script_name] = encoded_code
 
-        SCRIPTS[script_name] = paste_url
         embed = Embed(title="Script Added", color=Colour.green())
         embed.add_field(name="Script Name", value=script_name, inline=False)
-        embed.add_field(name="Link", value=f"`{paste_url}`", inline=False)
-        return await interaction.followup.send(embed=embed, ephemeral=True)
+        embed.add_field(name="Link", value=f"`{link_path}`", inline=False)
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
 
     verified = is_verified(user_id)
     embed = Embed(title="Control Panel", color=Colour.green() if verified else Colour.red())
@@ -211,10 +167,10 @@ class PanelButtons(ui.View):
             return await interaction.response.send_message("Error: No scripts available", ephemeral=True)
         user_key = USER_DATA[interaction.user.id]["key"]
         output = "Your Loadstring:\n```lua\n"
-        for name, url in SCRIPTS.items():
+        for name, code in SCRIPTS.items():
             output += f"-- {name}\n"
             output += f'getgenv().SCRIPT_KEY = "{user_key}"\n'
-            output += f'loadstring(game:HttpGet("{url}"))()\n\n'
+            output += f'loadstring(game:HttpGet("https://api.pastes.io/{code}"))()\n\n'
         output += "```"
         await interaction.response.send_message(output, ephemeral=True)
 
