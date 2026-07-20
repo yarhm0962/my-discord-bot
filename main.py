@@ -2,7 +2,6 @@ from flask import Flask
 from threading import Thread
 import os
 import re
-import json
 import aiohttp
 import asyncio
 import discord
@@ -28,18 +27,22 @@ TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
 LOADSTRING_SCHEDULES = {}
 
-async def upload_to_pastefy(content):
+async def upload_to_rentry(content):
     try:
-        payload = {"content": content}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
-            async with s.post("https://pastefy.app/api/pastes", json=payload, headers={"Content-Type":"application/json"}) as r:
-                if r.status in (200, 201):
-                    data = await r.json()
-                    paste_id = data.get("id")
-                    if paste_id:
-                        return f"https://pastefy.app/{paste_id}/raw"
+            async with s.post("https://rentry.co/api/new", data={"content": content, "edit_code": "roblox123"}) as r:
+                if r.status == 200 or r.status == 201:
+                    text = await r.text()
+                    if '"url"' in text:
+                        import re as regex
+                        m = regex.search(r'"url":\s*"([^"]+)"', text)
+                        if m:
+                            return f"{m.group(1)}/raw"
+                    m2 = regex.search(r'https://rentry\.co/([a-zA-Z0-9]+)', text)
+                    if m2:
+                        return f"https://rentry.co/{m2.group(1)}/raw"
     except Exception as e:
-        print(f"Pastefy Error: {e}")
+        print(f"Rentry Error: {e}")
     return None
 
 def generate_wrapped_lua(user_url):
@@ -164,7 +167,7 @@ async def on_message(message):
     
     await bot.process_commands(message)
 
-@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (PASTEFY)")
+@tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (RENTRY.CO)")
 @app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL OR full loadstring")
 async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_loadstring:str):
     if not interaction.user.guild_permissions.administrator:
@@ -174,18 +177,18 @@ async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,you
     if not user_url:
         return await interaction.followup.send("❌ No URL found. Enter direct URL like `https://...` or full loadstring",ephemeral=True)
     lua_code = generate_wrapped_lua(user_url)
-    pastefy_url = await upload_to_pastefy(lua_code)
-    if not pastefy_url:
-        return await interaction.followup.send("❌ Pastefy upload failed. Try again in a few seconds.",ephemeral=True)
-    wrapped_ls = f'loadstring(game:HttpGet("{pastefy_url}"))()'
+    rentry_url = await upload_to_rentry(lua_code)
+    if not rentry_url:
+        return await interaction.followup.send("❌ Upload failed. Try again in a few seconds.",ephemeral=True)
+    wrapped_ls = f'loadstring(game:HttpGet("{rentry_url}"))()'
     script_id = f"{script_name.replace(' ','_')}_SUNDAY"
-    LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"pastefy_url":pastefy_url}
+    LOADSTRING_SCHEDULES[script_id] = {"name":script_name,"user_url":user_url,"rentry_url":rentry_url}
     embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
     embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="📦 Pastefy URL",value=f"||{pastefy_url}||",inline=False)
+    embed.add_field(name="📦 Rentry URL",value=f"||{rentry_url}||",inline=False)
     embed.add_field(name="🔗 Original URL",value=f"||{user_url}||",inline=False)
     embed.description = f"**📋 COPY THIS LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
-    embed.set_footer(text="Runs ONLY on Sundays. Blocked Mon-Sat")
+    embed.set_footer(text="Runs ONLY on Sundays. Blocked Mon-Sat. Hosted on Rentry.co")
     await interaction.followup.send(embed=embed)
 
 @bot.command(name='cmds')
@@ -193,7 +196,7 @@ async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
     e.add_field(name="Prefix",value="`.d <link>` Deobfuscate\n`.cmds` Show commands",inline=False)
-    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED via PASTEFY\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
+    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED via RENTRY\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
     try:await ctx.message.delete()
     except:pass
