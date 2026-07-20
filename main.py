@@ -31,8 +31,11 @@ def extract_url(text):
     for pat in patterns:
         m = re.search(pat, text)
         if m:
-            return m.group(1)
-    return text.strip() if text.strip().startswith(('http://', 'https://')) else None
+            url = m.group(1)
+            if "api.pastes.io" in url:
+                return None
+            return url
+    return text.strip() if text.strip().startswith(('http://', 'https://')) and "api.pastes.io" not in text else None
 
 def try_decode(code):
     if not code: return "Error: Empty code"
@@ -60,6 +63,8 @@ def try_decode(code):
 
 async def deobfuscate_from_url(url):
     try:
+        if "api.pastes.io" in url:
+            return None, "Error: api.pastes.io does NOT exist! Use real links like rentry.co or paste.gg"
         if "rentry.co" in url and "/raw/" not in url:
             url = url.replace("rentry.co/", "rentry.co/raw/")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -80,6 +85,8 @@ async def deobf_prefix(ctx, *, link: str):
     status_msg = await ctx.send("Processing...")
     url = extract_url(link)
     if not url:
+        if "api.pastes.io" in link:
+            return await status_msg.edit(content="Error: api.pastes.io DOES NOT EXIST! Use real working links like https://rentry.co/raw/XXX or https://paste.gg/raw/XXX")
         return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
     deobf_code, error = await deobfuscate_from_url(url)
     if error:
