@@ -4,7 +4,7 @@ import os
 import hashlib
 import random
 import string
-import base64
+import aiohttp
 import discord
 from discord import app_commands, ui, ButtonStyle, Embed, Colour
 from discord.ext import commands
@@ -37,11 +37,24 @@ def get_hwid(user_id):
 def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
-# ✅ NO EXTERNAL API — INSTANT LINK — NEVER FAILS
-def create_link(code):
-    encoded = base64.b64encode(code.encode('utf-8')).decode('ascii')
+# ✅ REAL WORKING LINK CREATION
+async def create_paste(code):
     path = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
-    return f"https://api.pastes.io/{path}", encoded
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.post(
+                "https://rentry.co/api/new",
+                data={"text": code, "url": path, "edit_code": path, "json": "1"},
+                timeout=30
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("status") == "ok":
+                        # ✅ STORE REAL WORKING LINK
+                        return f"https://rentry.co/raw/{path}"
+    except Exception as e:
+        print(f"Error: {e}")
+    return None
 
 class RedeemModal(ui.Modal, title="Redeem Key"):
     key_input = ui.TextInput(label="Enter your key", placeholder="Paste your key here", required=True, min_length=10, max_length=30)
@@ -85,34 +98,40 @@ async def genkey(interaction: discord.Interaction, count: int=1):
     code="Paste your Lua code",
     file="Upload your .lua file"
 )
-async def panel(interaction: discord.Interaction, script_name: str, code: str="", file: discord.Attachment=None):
+async def panel(interaction: discord.Interaction, script_name: str="", code: str="", file: discord.Attachment=None):
     user_id = interaction.user.id
 
+    # === ADD SCRIPT MODE ===
     if script_name:
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("Permission denied", ephemeral=True)
 
         if not file and not code.strip():
             return await interaction.response.send_message(
-                "Error: Provide either file or code.\nUsage: /panel script_name:MyScript file:script.lua\nUsage: /panel script_name:MyScript code:print('hello')",
+                "Error: Provide either file or code.\n\nUsage:\n/panel script_name:MyScript file:script.lua\n/panel script_name:MyScript code:print('hello')",
                 ephemeral=True
             )
 
+        await interaction.response.defer(ephemeral=True)
+
         if file:
             try: script_code = (await file.read()).decode('utf-8')
-            except: return await interaction.response.send_message("Error: Failed to read file", ephemeral=True)
+            except: return await interaction.followup.send("Error: Failed to read file", ephemeral=True)
         else:
             script_code = code.strip()
 
-        # ✅ INSTANT LINK — NO EXTERNAL API CALL — NEVER FAILS
-        link_path, encoded_code = create_link(script_code)
-        SCRIPTS[script_name] = encoded_code
+        paste_url = await create_paste(script_code)
+        if not paste_url:
+            return await interaction.followup.send("Error: Failed to create link. Try again.", ephemeral=True)
 
-        embed = Embed(title="Script Added", color=Colour.green())
+        SCRIPTS[script_name] = paste_url
+        embed = Embed(title="Script Added Successfully", color=Colour.green())
         embed.add_field(name="Script Name", value=script_name, inline=False)
-        embed.add_field(name="Link", value=f"`{link_path}`", inline=False)
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.add_field(name="Working Link", value=f"`{paste_url}`", inline=False)
+        embed.add_field(name="Next Step", value="Open /panel → Click Get Loadstring", inline=False)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # === OPEN PANEL MODE (when script_name is empty) ===
     verified = is_verified(user_id)
     embed = Embed(title="Control Panel", color=Colour.green() if verified else Colour.red())
     if verified:
@@ -164,14 +183,14 @@ class PanelButtons(ui.View):
         if not is_verified(interaction.user.id):
             return await interaction.response.send_message("Error: Redeem key first", ephemeral=True)
         if not SCRIPTS:
-            return await interaction.response.send_message("Error: No scripts available", ephemeral=True)
+            return await interaction.response.send_message("Error: No scripts available. Add one first.", ephemeral=True)
         user_key = USER_DATA[interaction.user.id]["key"]
-        output = "Your Loadstring:\n```lua\n"
-        for name, code in SCRIPTS.items():
+        output = "Your Working Loadstring:\n```lua\n"
+        for name, url in SCRIPTS.items():
             output += f"-- {name}\n"
             output += f'getgenv().SCRIPT_KEY = "{user_key}"\n'
-            output += f'loadstring(game:HttpGet("https://api.pastes.io/{code}"))()\n\n'
-        output += "```"
+            output += f'loadstring(game:HttpGet("{url}"))()\n\n'
+        output += "```\nCopy everything and paste into your executor."
         await interaction.response.send_message(output, ephemeral=True)
 
     @ui.button(label="Reset Hardware ID", style=ButtonStyle.secondary)
