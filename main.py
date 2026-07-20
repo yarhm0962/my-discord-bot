@@ -5,6 +5,7 @@ import hashlib
 import random
 import string
 import discord
+import aiohttp
 from discord import app_commands, ui, ButtonStyle, Embed, Colour
 from discord.ext import commands
 
@@ -36,6 +37,24 @@ def get_hwid(user_id):
 def is_verified(user_id):
     return user_id in USER_DATA and USER_DATA[user_id].get("verified", False)
 
+async def create_paste(code):
+    url = "https://rentry.co/api/new"
+    chars = string.ascii_uppercase + string.digits
+    suffix = ''.join(random.choice(chars) for _ in range(8))
+    payload = {
+        "text": code,
+        "url": suffix,
+        "edit_code": suffix,
+        "json": "1"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get("status") == "ok":
+                    return f"https://rentry.co/raw/{suffix}"
+    return None
+
 class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
     key_input = ui.TextInput(
         label="Key to Redeem",
@@ -53,13 +72,30 @@ class RedeemModal(ui.Modal, title="🔑 Redeem Your Key"):
             USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
             embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
             embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
-            embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
-            embed.set_footer(text="Use /panel to see your updated status")
+            embed.set_footer(text="Reopen /panel to see your access")
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
             embed.description = "The key you entered is not recognized. Please check your key and try again."
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class AddScriptModal(ui.Modal, title="➕ Add New Script"):
+    name_input = ui.TextInput(label="Script Name", placeholder="e.g. MyScript", required=True)
+    code_input = ui.TextInput(label="Paste Your Lua Code", placeholder="Paste your full script code here...", required=True, style=discord.TextStyle.long)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = str(self.name_input).strip()
+        code = str(self.code_input).strip()
+        await interaction.response.defer(ephemeral=True)
+        paste_url = await create_paste(code)
+        if not paste_url:
+            return await interaction.followup.send("❌ Failed to create paste link! Try again.", ephemeral=True)
+        SCRIPTS[name] = paste_url
+        embed = Embed(title="✅ SCRIPT UPLOADED!", color=Colour.green())
+        embed.add_field(name="Script Name", value=name, inline=False)
+        embed.add_field(name="🔗 Generated Link", value=f"`{paste_url}`", inline=False)
+        embed.set_footer(text="Users get auto loadstring from panel!")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -84,7 +120,7 @@ async def genkey(interaction: discord.Interaction, count: int=1):
     embed = Embed(title="✅ KEY(S) GENERATED!", color=Colour.green())
     embed.description = "\n".join(new_keys)
     embed.add_field(name="Format", value="`KEY-XXX-XXXX-XXX`", inline=False)
-    embed.set_footer(text="Click Redeem Key button on panel to activate")
+    embed.set_footer(text="Click 🔑 Redeem Key on panel to activate")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="panel", description="Open Control Panel")
@@ -93,18 +129,15 @@ async def panel(interaction: discord.Interaction):
     verified = is_verified(user_id)
     embed = Embed(
         title="🔐 CONTROL PANEL",
-        description="Welcome to your personal Control Panel. Manage your access, view your HWID, and retrieve your scripts & loadstrings all in one place.",
+        description="Welcome to your Control Panel. Manage your access and retrieve your script loadstrings instantly.",
         color=Colour.green() if verified else Colour.red()
     )
     if verified:
-        hwid = USER_DATA[user_id]["hwid"]
         embed.add_field(name="🔑 Status", value="✅ Verified — Full Access Granted", inline=False)
-        embed.add_field(name="💻 HWID", value=f"`{hwid}`", inline=False)
-        embed.add_field(name="📜 Scripts", value=f"{len(SCRIPTS)} scripts available", inline=False)
+        embed.add_field(name="📜 Scripts Available", value=f"{len(SCRIPTS)} script(s)", inline=False)
     else:
         embed.add_field(name="🔒 Access Restricted", value="Click [🔑 Redeem Key] below to unlock all features.", inline=False)
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    embed.set_footer(text=f"User: {interaction.user.name} | Control Panel System")
     view = PanelButtons()
     await interaction.response.send_message(embed=embed, view=view)
 
@@ -116,8 +149,7 @@ async def redeem(interaction: discord.Interaction, key: str):
         USER_DATA[user_id] = {"key": key, "hwid": hwid, "verified": True}
         embed = Embed(title="✅ KEY REDEEMED SUCCESSFULLY!", color=Colour.green())
         embed.add_field(name="🔑 Status", value="✅ UNLOCKED — Full Access Granted", inline=False)
-        embed.add_field(name="💻 Your HWID", value=f"`{hwid}`", inline=False)
-        embed.set_footer(text="Use /panel to see your updated status")
+        embed.set_footer(text="Reopen /panel to see your access")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
         embed = Embed(title="❌ INVALID KEY!", color=Colour.red())
@@ -135,30 +167,6 @@ async def reset_hwid(interaction: discord.Interaction):
     embed.add_field(name="💻 New HWID", value=f"`{new_hwid}`", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@tree.command(name="get_script", description="Get your script loadstring")
-async def get_script(interaction: discord.Interaction, name: str=None):
-    user_id = interaction.user.id
-    if not is_verified(user_id):
-        return await interaction.response.send_message("❌ Not verified! Redeem your key first.", ephemeral=True)
-    if not name:
-        return await interaction.response.send_message(f"❌ Usage: /get_script [name] | Available: {', '.join(SCRIPTS.keys()) or 'None'}", ephemeral=True)
-    if name in SCRIPTS:
-        code = SCRIPTS[name]
-        loadstring = "loadstring(game:HttpGet('PASTE-YOUR-URL-HERE'))()"
-        embed = Embed(title=f"📜 SCRIPT: {name}", color=Colour.purple())
-        embed.add_field(name="🔗 Loadstring", value=f"```lua\n{loadstring}\n```", inline=False)
-        embed.add_field(name="📄 Code", value=f"```lua\n{code[:800]}\n```", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    else:
-        await interaction.response.send_message(f"❌ Script `{name}` not found!", ephemeral=True)
-
-@tree.command(name="add_script", description="Add a new script (Admin only)")
-async def add_script(interaction: discord.Interaction, name: str, code: str):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-    SCRIPTS[name] = code
-    await interaction.response.send_message(f"✅ Script `{name}` saved!", ephemeral=True)
-
 class PanelButtons(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -166,20 +174,26 @@ class PanelButtons(ui.View):
     @ui.button(label="🔑 Redeem Key", style=ButtonStyle.primary)
     async def redeem_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if is_verified(interaction.user.id):
-            return await interaction.response.send_message("✅ You are already verified! Close this panel and type `/panel` again to see your updated status.", ephemeral=True)
+            return await interaction.response.send_message("✅ Already verified! Reopen /panel to see your access.", ephemeral=True)
         await interaction.response.send_modal(RedeemModal())
+
+    @ui.button(label="➕ Add Script", style=ButtonStyle.blurple)
+    async def add_script_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        await interaction.response.send_modal(AddScriptModal())
 
     @ui.button(label="📜 Get Loadstring", style=ButtonStyle.success)
     async def loadstring_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_verified(interaction.user.id):
             return await interaction.response.send_message("❌ Not verified! Click [🔑 Redeem Key] first.", ephemeral=True)
-        if SCRIPTS:
-            embed = Embed(title="📜 AVAILABLE SCRIPTS", color=Colour.blue())
-            for name in SCRIPTS:
-                embed.add_field(name=f"• {name}", value=f"Use `/get_script {name}`", inline=False)
-        else:
-            embed = Embed(title="📜 SCRIPTS", description="No scripts added yet. Admin use `/add_script`", color=Colour.orange())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if not SCRIPTS:
+            return await interaction.response.send_message("❌ No scripts available yet. Ask an admin to add one.", ephemeral=True)
+        output = "📋 **YOUR WORKING LOADSTRING:**\n```lua\n"
+        for name, url in SCRIPTS.items():
+            output += f'-- {name}\nloadstring(game:HttpGet("{url}"))()\n\n'
+        output += "```\n✅ **COPY & EXECUTE DIRECTLY IN ROBLOX! LINK WORKS 100%!**"
+        await interaction.response.send_message(output, ephemeral=True)
 
     @ui.button(label="🔄 Reset HWID", style=ButtonStyle.secondary)
     async def reset_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
