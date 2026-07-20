@@ -1,5 +1,4 @@
 from flask import Flask
-from flask import request
 from threading import Thread
 import os
 import re
@@ -15,7 +14,6 @@ from discord.ext import commands
 app = Flask(__name__)
 STORED_SCRIPTS = {}
 
-# YOUR OWN RAW ENDPOINT — NO EXTERNAL SITES!
 @app.route('/')
 def home():
     return "✅ Bot Online — Raw Service Active"
@@ -41,11 +39,11 @@ TIMEOUT_DURATION = 300
 WARNING_EXPIRE_MINUTES = 10
 LOADSTRING_SCHEDULES = {}
 
-def get_bot_domain():
-    env_domain = os.getenv("DOMAIN", "").strip()
-    if env_domain and env_domain != "":
-        return env_domain.rstrip('/')
-    return request.host_url.rstrip('/')
+DOMAIN = os.getenv("DOMAIN", "").strip()
+if not DOMAIN:
+    DOMAIN = "https://" + os.getenv("REPLIT_DEV_DOMAIN", "").strip()
+if not DOMAIN or DOMAIN == "https://":
+    DOMAIN = "http://127.0.0.1:8080"
 
 def generate_wrapped_lua(user_url):
     return f'''local D=os.date("%w")
@@ -170,37 +168,37 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @tree.command(name="add_loadstring",description="Create SUNDAY-LOCKED loadstring (YOUR OWN LINK)")
-@app_commands.describe(script_name="Name of your script",your_loadstring="Paste URL OR full loadstring")
-async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_loadstring:str):
+@app_commands.describe(script_name="Name of your script",your_url="Script URL or full loadstring")
+async def add_loadstring_cmd(interaction:discord.Interaction,script_name:str,your_url:str):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Permission required: Administrator",ephemeral=True)
-    await interaction.response.defer()
-    user_url = extract_url(your_loadstring)
+        return await interaction.response.send_message("❌ Permission required: Administrator",ephemeral=True)
+    
+    user_url = extract_url(your_url)
     if not user_url:
-        return await interaction.followup.send("❌ No URL found. Enter direct URL like `https://...` or full loadstring",ephemeral=True)
+        return await interaction.response.send_message("❌ No URL found. Enter direct URL like `https://...`",ephemeral=True)
     
     lua_code = generate_wrapped_lua(user_url)
     script_id = uuid.uuid4().hex[:12]
     STORED_SCRIPTS[script_id] = lua_code
     
-    raw_url = f"{get_bot_domain()}/raw/{script_id}"
+    raw_url = f"{DOMAIN}/raw/{script_id}"
     wrapped_ls = f'loadstring(game:HttpGet("{raw_url}"))()'
-    LOADSTRING_SCHEDULES[script_name.replace(" ","_")] = {"name":script_name,"user_url":user_url,"raw_url":raw_url}
     
     embed = discord.Embed(title=f"✅ {script_name}",color=discord.Colour.teal())
     embed.add_field(name="🔒 Active Only",value="SUNDAYS ONLY",inline=False)
-    embed.add_field(name="📦 YOUR OWN RAW LINK",value=f"||{raw_url}||",inline=False)
+    embed.add_field(name="📦 YOUR RAW LINK",value=f"||{raw_url}||",inline=False)
     embed.add_field(name="🔗 Original URL",value=f"||{user_url}||",inline=False)
-    embed.description = f"**📋 COPY THIS LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
-    embed.set_footer(text="✅ YOUR OWN LINK — No third-party sites! No uploads! Always works!")
-    await interaction.followup.send(embed=embed)
+    embed.description = f"**📋 LOADSTRING:**\n```lua\n{wrapped_ls}\n```"
+    embed.set_footer(text="✅ Instant — No uploads! Always works!")
+    
+    await interaction.response.send_message(embed=embed)
 
 @bot.command(name='cmds')
 async def show_cmds(ctx):
     if ctx.author.bot:return
     e=discord.Embed(title="Bot Commands",color=discord.Colour.blue())
     e.add_field(name="Prefix",value="`.d <link>` Deobfuscate\n`.cmds` Show commands",inline=False)
-    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED (YOUR OWN LINK)\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
+    e.add_field(name="Slash",value="`/add_loadstring` SUNDAY-LOCKED\n`/deobf-file` Deobfuscate file\n`/create-ticket` Ticket panel\n`/create-embed` Custom embed\n`/ban` `/unban` `/kick` `/mute` `/unmute`",inline=False)
     await ctx.send(embed=e)
     try:await ctx.message.delete()
     except:pass
@@ -221,12 +219,12 @@ async def deobf_prefix(ctx,*,link:str):
 async def deobf_file(interaction:discord.Interaction,file:discord.Attachment):
     if not file.filename.endswith(('.lua','.txt')):
         return await interaction.response.send_message("Upload .lua or .txt file",ephemeral=True)
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
     try:c=(await file.read()).decode('utf-8',errors='ignore')
     except Exception as e:return await interaction.followup.send(f"Error reading file: {e}",ephemeral=True)
     d=smart_decode(c);fn=f"deobf_{interaction.id}.lua"
     with open(fn,'w',encoding='utf-8')as f:f.write(d)
-    await interaction.followup.send("Deobfuscated successfully",file=File(fn));os.remove(fn)
+    await interaction.followup.send("✅ Deobfuscated!",file=File(fn));os.remove(fn)
 
 class CloseTicketView(discord.ui.View):
     def __init__(self):super().__init__(timeout=None)
@@ -238,14 +236,14 @@ class CloseTicketView(discord.ui.View):
         is_staff=staff_role in interaction.user.roles if staff_role else False
         if not (is_staff or interaction.user.guild_permissions.manage_channels):
             return await interaction.response.send_message("No permission to close ticket",ephemeral=True)
-        await interaction.response.send_message("Closing ticket in 3 seconds...")
+        await interaction.response.send_message("Closing ticket in 3s...")
         await asyncio.sleep(3);await interaction.channel.delete()
 
 @tree.command(name="create-ticket",description="Create a ticket panel")
-@app_commands.describe(admin_role="Role that manages tickets",category="Category where tickets appear",description="Custom panel message",color="Embed color (name or hex)")
+@app_commands.describe(admin_role="Role that manages tickets",category="Category",description="Panel text",color="Embed color")
 async def create_ticket_panel(interaction:discord.Interaction,admin_role:discord.Role,category:discord.CategoryChannel,description:str="",color:str="green"):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Administrator permission required",ephemeral=True)
+        return await interaction.response.send_message("Admin permission required",ephemeral=True)
     panel_description=description if description else "CREATE A TICKET BELOW"
     embed_color=get_color(color)
     TICKET_SETTINGS[interaction.channel.id]={"admin_role_id":admin_role.id,"category_id":category.id}
@@ -254,130 +252,117 @@ async def create_ticket_panel(interaction:discord.Interaction,admin_role:discord
         @discord.ui.button(label="Create Ticket",style=discord.ButtonStyle.success,custom_id="create_ticket_button")
         async def create_ticket_btn(self,btn_interaction:discord.Interaction,button:discord.ui.Button):
             settings=TICKET_SETTINGS.get(btn_interaction.channel_id)
-            if not settings:return await btn_interaction.response.send_message("Error: Panel not configured",ephemeral=True)
+            if not settings:return await btn_interaction.response.send_message("Panel not configured",ephemeral=True)
             guild=btn_interaction.guild
             ticket_category=guild.get_channel(settings["category_id"])
             staff_role=guild.get_role(settings["admin_role_id"])
             if not ticket_category or not staff_role:
-                return await btn_interaction.response.send_message("Error: Category or role not found",ephemeral=True)
+                return await btn_interaction.response.send_message("Missing category/staff role",ephemeral=True)
             channel_name=f"{btn_interaction.user.name}-ticket"
             overwrites={guild.default_role:discord.PermissionOverwrite(view_channel=False),btn_interaction.user:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),staff_role:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True)}
             ticket_channel=await ticket_category.create_text_channel(name=channel_name,overwrites=overwrites)
-            ticket_embed=discord.Embed(title="Ticket Created",description="Wait for staff to assist",color=discord.Colour.green())
+            ticket_embed=discord.Embed(title="Ticket Created",description="Wait for staff",color=discord.Colour.green())
             ticket_embed.add_field(name="Created By",value=btn_interaction.user.mention,inline=False)
             ticket_embed.add_field(name="Staff",value=staff_role.mention,inline=False)
             await ticket_channel.send(embed=ticket_embed,view=CloseTicketView())
-            await btn_interaction.response.send_message(f"Ticket created → {ticket_channel.mention}",ephemeral=True)
+            await btn_interaction.response.send_message(f"Ticket → {ticket_channel.mention}",ephemeral=True)
     embed=discord.Embed(description=panel_description,color=embed_color)
     await interaction.response.send_message(embed=embed,view=TicketPanel())
 
-@tree.command(name="create-embed",description="Create a custom embed message")
-@app_commands.describe(description="Embed content text",color="Embed color (name or hex)")
+@tree.command(name="create-embed",description="Create custom embed")
+@app_commands.describe(description="Embed text",color="Color name or hex")
 async def create_embed_cmd(interaction:discord.Interaction,description:str,color:str="green"):
     if not interaction.user.guild_permissions.manage_messages:
-        return await interaction.response.send_message("Manage Messages permission required",ephemeral=True)
+        return await interaction.response.send_message("Manage Messages permission needed",ephemeral=True)
     embed_color=get_color(color)
     embed=discord.Embed(description=description,color=embed_color)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="ban",description="Ban a user from the server")
-@app_commands.describe(user="User to ban",reason="Reason for ban")
-async def ban_user_cmd(interaction:discord.Interaction,user:discord.Member,reason:str="No reason provided"):
+@tree.command(name="ban",description="Ban a user")
+@app_commands.describe(user="User to ban",reason="Reason")
+async def ban_user_cmd(interaction:discord.Interaction,user:discord.Member,reason:str="No reason"):
     if not interaction.user.guild_permissions.ban_members:
-        return await interaction.response.send_message("Ban Members permission required",ephemeral=True)
+        return await interaction.response.send_message("Ban permission needed",ephemeral=True)
     if user.top_role>=interaction.user.top_role and interaction.user.id!=interaction.guild.owner_id:
-        return await interaction.response.send_message("Cannot ban user with higher or equal role",ephemeral=True)
+        return await interaction.response.send_message("Cannot ban higher role",ephemeral=True)
     if user==interaction.user:return await interaction.response.send_message("Cannot ban yourself",ephemeral=True)
     await interaction.guild.ban(user,reason=reason)
     embed=discord.Embed(title="User Banned",color=discord.Colour.red())
     embed.add_field(name="User",value=user.mention,inline=False)
-    embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
+    embed.add_field(name="Mod",value=interaction.user.mention,inline=False)
     embed.add_field(name="Reason",value=reason,inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="unban",description="Unban a user by ID")
-@app_commands.describe(user_id="ID of user to unban")
+@tree.command(name="unban",description="Unban by User ID")
+@app_commands.describe(user_id="User ID")
 async def unban_user_cmd(interaction:discord.Interaction,user_id:str):
     if not interaction.user.guild_permissions.ban_members:
-        return await interaction.response.send_message("Ban Members permission required",ephemeral=True)
-    try:uid=int(user_id);banned_users=[entry async for entry in interaction.guild.bans()]
-    except ValueError:return await interaction.response.send_message("Invalid User ID",ephemeral=True)
-    for ban_entry in banned_users:
-        if ban_entry.user.id==uid:
-            await interaction.guild.unban(ban_entry.user)
+        return await interaction.response.send_message("Ban permission needed",ephemeral=True)
+    try:uid=int(user_id);banned=[entry async for entry in interaction.guild.bans()]
+    except ValueError:return await interaction.response.send_message("Invalid ID",ephemeral=True)
+    for e in banned:
+        if e.user.id==uid:
+            await interaction.guild.unban(e.user)
             embed=discord.Embed(title="User Unbanned",color=discord.Colour.green())
-            embed.add_field(name="User",value=ban_entry.user.mention,inline=False)
-            embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
+            embed.add_field(name="User",value=e.user.mention,inline=False)
+            embed.add_field(name="Mod",value=interaction.user.mention,inline=False)
             return await interaction.response.send_message(embed=embed)
-    await interaction.response.send_message("User not found in ban list",ephemeral=True)
+    await interaction.response.send_message("User not banned",ephemeral=True)
 
-@tree.command(name="kick",description="Kick a user from the server")
-@app_commands.describe(user="User to kick",reason="Reason for kick")
-async def kick_user_cmd(interaction:discord.Interaction,user:discord.Member,reason:str="No reason provided"):
+@tree.command(name="kick",description="Kick a user")
+@app_commands.describe(user="User to kick",reason="Reason")
+async def kick_user_cmd(interaction:discord.Interaction,user:discord.Member,reason:str="No reason"):
     if not interaction.user.guild_permissions.kick_members:
-        return await interaction.response.send_message("Kick Members permission required",ephemeral=True)
+        return await interaction.response.send_message("Kick permission needed",ephemeral=True)
     if user.top_role>=interaction.user.top_role and interaction.user.id!=interaction.guild.owner_id:
-        return await interaction.response.send_message("Cannot kick user with higher or equal role",ephemeral=True)
+        return await interaction.response.send_message("Cannot kick higher role",ephemeral=True)
     if user==interaction.user:return await interaction.response.send_message("Cannot kick yourself",ephemeral=True)
     await interaction.guild.kick(user,reason=reason)
     embed=discord.Embed(title="User Kicked",color=discord.Colour.orange())
     embed.add_field(name="User",value=user.mention,inline=False)
-    embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
+    embed.add_field(name="Mod",value=interaction.user.mention,inline=False)
     embed.add_field(name="Reason",value=reason,inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="mute",description="Mute or timeout a user")
-@app_commands.describe(user="User to mute",time="Duration like 1m, 1h, 1d",reason="Reason for mute")
-async def mute_user_cmd(interaction:discord.Interaction,user:discord.Member,time:str="",reason:str="No reason provided"):
-    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
-        return await interaction.response.send_message("Manage Roles or Moderate Members permission required",ephemeral=True)
+@tree.command(name="mute",description="Mute/Timeout user")
+@app_commands.describe(user="User",time="1m/1h/1d",reason="Reason")
+async def mute_user_cmd(interaction:discord.Interaction,user:discord.Member,time:str="",reason:str="No reason"):
+    if not interaction.user.guild_permissions.moderate_members:
+        return await interaction.response.send_message("Moderate Members permission needed",ephemeral=True)
     if user.top_role>=interaction.user.top_role and interaction.user.id!=interaction.guild.owner_id:
-        return await interaction.response.send_message("Cannot mute user with higher or equal role",ephemeral=True)
+        return await interaction.response.send_message("Cannot mute higher role",ephemeral=True)
     if user==interaction.user:return await interaction.response.send_message("Cannot mute yourself",ephemeral=True)
-    duration=parse_time(time)
-    if duration:
-        await user.timeout(discord.utils.utcnow()+timedelta(seconds=duration),reason=reason)
+    dur=parse_time(time)
+    if dur:
+        await user.timeout(discord.utils.utcnow()+timedelta(seconds=dur),reason=reason)
         embed=discord.Embed(title="User Timed Out",color=discord.Colour.orange())
         embed.add_field(name="User",value=user.mention,inline=False)
         embed.add_field(name="Duration",value=time,inline=False)
         embed.add_field(name="Reason",value=reason,inline=False)
-        embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
         await interaction.response.send_message(embed=embed)
     else:
-        mute_role=discord.utils.get(interaction.guild.roles,name="Muted")
-        if not mute_role:
-            mute_role=await interaction.guild.create_role(name="Muted")
-            for channel in interaction.guild.channels:
-                await channel.set_permissions(mute_role,send_messages=False,speak=False)
-        if mute_role in user.roles:
-            return await interaction.response.send_message("User is already muted",ephemeral=True)
-        await user.add_roles(mute_role,reason=reason)
+        role=discord.utils.get(interaction.guild.roles,name="Muted")
+        if not role:role=await interaction.guild.create_role(name="Muted");[await c.set_permissions(role,send_messages=False,speak=False)for c in interaction.guild.channels]
+        if role in user.roles:return await interaction.response.send_message("Already muted",ephemeral=True)
+        await user.add_roles(role,reason=reason)
         embed=discord.Embed(title="User Muted",color=discord.Colour.red())
         embed.add_field(name="User",value=user.mention,inline=False)
-        embed.add_field(name="Duration",value="Permanent",inline=False)
         embed.add_field(name="Reason",value=reason,inline=False)
-        embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
         await interaction.response.send_message(embed=embed)
 
-@tree.command(name="unmute",description="Remove mute or timeout from user")
-@app_commands.describe(user="User to unmute")
+@tree.command(name="unmute",description="Remove mute/timeout")
+@app_commands.describe(user="User")
 async def unmute_user_cmd(interaction:discord.Interaction,user:discord.Member):
-    if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
-        return await interaction.response.send_message("Manage Roles or Moderate Members permission required",ephemeral=True)
+    if not interaction.user.guild_permissions.moderate_members:
+        return await interaction.response.send_message("Moderate Members permission needed",ephemeral=True)
     try:await user.timeout(None)
     except:pass
-    mute_role=discord.utils.get(interaction.guild.roles,name="Muted")
-    if mute_role and mute_role in user.roles:
-        await user.remove_roles(mute_role)
-        embed=discord.Embed(title="User Unmuted",color=discord.Colour.green())
-        embed.add_field(name="User",value=user.mention,inline=False)
-        embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
-        await interaction.response.send_message(embed=embed)
-    else:
-        embed=discord.Embed(title="Timeout Removed",color=discord.Colour.green())
-        embed.add_field(name="User",value=user.mention,inline=False)
-        embed.add_field(name="Moderator",value=interaction.user.mention,inline=False)
-        await interaction.response.send_message(embed=embed)
+    role=discord.utils.get(interaction.guild.roles,name="Muted")
+    if role and role in user.roles:await user.remove_roles(role)
+    embed=discord.Embed(title="User Unmuted",color=discord.Colour.green())
+    embed.add_field(name="User",value=user.mention,inline=False)
+    embed.add_field(name="Mod",value=interaction.user.mention,inline=False)
+    await interaction.response.send_message(embed=embed)
 
 @bot.event
 async def on_ready():
