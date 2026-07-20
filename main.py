@@ -3,6 +3,7 @@ from threading import Thread
 import os
 import re
 import base64
+import string
 import aiohttp
 import discord
 from discord import app_commands, File
@@ -37,34 +38,84 @@ def extract_url(text):
             return url
     return text.strip() if text.strip().startswith(('http://', 'https://')) and "api.pastes.io" not in text else None
 
-def try_decode(code):
-    if not code: return "Error: Empty code"
+def smart_decode(code):
+    if not code or len(code) < 5:
+        return code or ""
+    
     original = code
     code = code.strip()
-    b64_patterns = [
-        r'loadstring\s*\(\s*base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
-        r'base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
-        r'["\']([A-Za-z0-9+/=]{20,})["\']'
-    ]
-    for pat in b64_patterns:
-        m = re.search(pat, code)
-        if m:
-            try:
-                decoded = base64.b64decode(m.group(1)).decode('utf-8', errors='ignore')
-                if decoded and len(decoded) > 10:
-                    code = decoded
-            except: pass
-    m = re.match(r'^loadstring\s*\(\s*(.+)\s*\)\s*\([^)]*\)?\s*$', code.strip(), re.DOTALL)
+    
+    # Remove loadstring wrapper
+    m = re.match(r'^(loadstring\s*\(\s*)?(.+?)(\)\s*\([^)]*\)?\s*)?$', code, re.DOTALL)
     if m:
-        inner = m.group(1).strip()
-        if not inner.startswith('game:HttpGet'):
+        inner = m.group(2).strip()
+        if not inner.startswith('game:HttpGet') and len(inner) > 20:
             code = inner
-    return code if code else original
+    
+    # Try base64 - multiple patterns
+    b64_matches = []
+    patterns = [
+        r'base64\.decode\s*\(\s*["\']([A-Za-z0-9+/=]+)["\']',
+        r'["\']([A-Za-z0-9+/=]{30,})["\']',
+        r'loadstring\s*\(\s*["\']([A-Za-z0-9+/=]{30,})["\']'
+    ]
+    for pat in patterns:
+        for match in re.finditer(pat, code):
+            b64_matches.append(match.group(1))
+    
+    for b64_text in b64_matches:
+        try:
+            if len(b64_text) % 4 != 0:
+                b64_text += '=' * (4 - len(b64_text) % 4)
+            decoded = base64.b64decode(b64_text).decode('utf-8', errors='ignore')
+            if decoded and len(decoded) > 10 and not decoded.startswith('--'):
+                code = decoded
+                return smart_decode(code)
+        except:
+            continue
+    
+    # Try string.reverse
+    rev_pattern = r'string\.reverse\s*\(\s*["\']([^"\']+)["\']'
+    m = re.search(rev_pattern, code)
+    if m:
+        try:
+            reversed_str = m.group(1)[::-1]
+            if len(reversed_str) > 20:
+                try:
+                    b64_part = reversed_str
+                    if len(b64_part) % 4 != 0:
+                        b64_part += '=' * (4 - len(b64_part) % 4)
+                    decoded = base64.b64decode(b64_part).decode('utf-8', errors='ignore')
+                    if decoded and len(decoded) > 10:
+                        code = decoded
+                        return smart_decode(code)
+                except:
+                    if len(reversed_str) > 10:
+                        code = reversed_str
+                        return smart_decode(code)
+        except:
+            pass
+    
+    # Remove obfuscated headers/comments
+    lines = code.split('\n')
+    clean_lines = []
+    skip_until_end = False
+    for line in lines:
+        ls = line.strip()
+        if ls.startswith('--') and len(ls) < 50:
+            continue
+        if 'obfuscated' in ls.lower() or 'generated' in ls.lower():
+            continue
+        if len(ls) > 10 or ls:
+            clean_lines.append(line)
+    code = '\n'.join(clean_lines)
+    
+    return code if len(code) > 5 else original
 
 async def deobfuscate_from_url(url):
     try:
         if "api.pastes.io" in url:
-            return None, "Error: api.pastes.io does NOT exist! Use real links like rentry.co or paste.gg"
+            return None, "Error: api.pastes.io DOES NOT EXIST! Use links like rentry.co/raw/XXX"
         if "rentry.co" in url and "/raw/" not in url:
             url = url.replace("rentry.co/", "rentry.co/raw/")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
@@ -74,7 +125,7 @@ async def deobfuscate_from_url(url):
                 code = await resp.text()
                 if not code or len(code) < 5:
                     return None, "Error: Empty response from URL"
-                deobf = try_decode(code)
+                deobf = smart_decode(code)
                 return deobf, None
     except Exception as e:
         return None, f"Fetch Error: {str(e)[:80]}"
@@ -86,7 +137,7 @@ async def deobf_prefix(ctx, *, link: str):
     url = extract_url(link)
     if not url:
         if "api.pastes.io" in link:
-            return await status_msg.edit(content="Error: api.pastes.io DOES NOT EXIST! Use real working links like https://rentry.co/raw/XXX or https://paste.gg/raw/XXX")
+            return await status_msg.edit(content="Error: api.pastes.io DOES NOT EXIST! Use real links like https://rentry.co/raw/XXX")
         return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
     deobf_code, error = await deobfuscate_from_url(url)
     if error:
@@ -101,14 +152,14 @@ async def deobf_prefix(ctx, *, link: str):
 @tree.command(name="deobf-file", description="Upload a .lua file to deobfuscate")
 @app_commands.describe(file="Upload your obfuscated .lua file")
 async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment):
-    if not file.filename.endswith('.lua'):
-        return await interaction.response.send_message("Error: Please upload a .lua file", ephemeral=True)
+    if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
+        return await interaction.response.send_message("Error: Please upload a .lua or .txt file", ephemeral=True)
     await interaction.response.defer()
     try:
         content = (await file.read()).decode('utf-8', errors='ignore')
     except Exception as e:
         return await interaction.followup.send(f"Error: Could not read file - {str(e)}", ephemeral=True)
-    deobf_code = try_decode(content)
+    deobf_code = smart_decode(content)
     filename = f"deobfuscated_{interaction.id}.lua"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(deobf_code)
