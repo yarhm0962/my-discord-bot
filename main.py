@@ -25,6 +25,7 @@ tree = bot.tree
 TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
+MENTION_WARNINGS_ENABLED = True  # Default state for highest role mention warnings
 
 def parse_time(time_str):
     if not time_str:
@@ -163,53 +164,75 @@ async def deobfuscate_from_url(url):
     except Exception as e:
         return None, f"Fetch Error: {str(e)[:80]}"
 
+@tree.command(name="warning-mention", description="Toggle mention warnings for the highest role On or Off")
+@app_commands.describe(status="Select whether to turn mention warnings On or Off")
+@app_commands.choices(status=[
+    app_commands.Choice(name="On", value="on"),
+    app_commands.Choice(name="Off", value="off")
+])
+async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str]):
+    global MENTION_WARNINGS_ENABLED
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Error: Administrator permission is required to change this setting.", ephemeral=True)
+    
+    if status.value == "on":
+        MENTION_WARNINGS_ENABLED = True
+        embed = discord.Embed(title="⚙️ Mention Protection Enabled", description="Warnings for mentioning the highest role are now **ON**.", color=discord.Colour.green())
+    else:
+        MENTION_WARNINGS_ENABLED = False
+        embed = discord.Embed(title="⚙️ Mention Protection Disabled", description="Warnings for mentioning the highest role are now **OFF**.", color=discord.Colour.red())
+        
+    await interaction.response.send_message(embed=embed)
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return await bot.process_commands(message)
     
-    # Get highest role in server
-    highest_role = max(message.guild.roles, key=lambda r: r.position)
-    
-    # Check if highest role is mentioned OR any user with highest role is mentioned
-    mentioned_highest = False
-    if highest_role in message.role_mentions:
-        mentioned_highest = True
-    else:
-        for user in message.mentions:
-            if highest_role in user.roles:
-                mentioned_highest = True
-                break
-    
-    if mentioned_highest:
-        guild_id = message.guild.id
-        user_id = message.author.id
-        WARNINGS.setdefault(guild_id, {})
-        WARNINGS[guild_id].setdefault(user_id, 0)
-        WARNINGS[guild_id][user_id] += 1
-        count = WARNINGS[guild_id][user_id]
+    # Check if mention warnings are enabled globally
+    if MENTION_WARNINGS_ENABLED:
+        # Get highest role in server
+        highest_role = max(message.guild.roles, key=lambda r: r.position)
         
-        if count == 1:
-            embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
-            embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
-            await message.channel.send(embed=embed)
-        elif count == 2:
-            embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
-            embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning the highest role.\nYou will be timed out after the next warning!"
-            await message.channel.send(embed=embed)
-        elif count >= 3:
-            try:
-                await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3 times")
-                embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
-                embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+        # Check if highest role is mentioned OR any user with highest role is mentioned
+        mentioned_highest = False
+        if highest_role in message.role_mentions:
+            mentioned_highest = True
+        else:
+            for user in message.mentions:
+                if highest_role in user.roles:
+                    mentioned_highest = True
+                    break
+        
+        if mentioned_highest:
+            guild_id = message.guild.id
+            user_id = message.author.id
+            WARNINGS.setdefault(guild_id, {})
+            WARNINGS[guild_id].setdefault(user_id, 0)
+            WARNINGS[guild_id][user_id] += 1
+            count = WARNINGS[guild_id][user_id]
+            
+            if count == 1:
+                embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
+                embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
                 await message.channel.send(embed=embed)
-                WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
-            except Exception as e:
-                embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
-                embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+            elif count == 2:
+                embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
+                embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning the highest role.\nYou will be timed out after the next warning!"
                 await message.channel.send(embed=embed)
-                WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
-    
+            elif count >= 3:
+                try:
+                    await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3 times")
+                    embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
+                    embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+                    await message.channel.send(embed=embed)
+                    WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
+                except Exception as e:
+                    embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
+                    embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+                    await message.channel.send(embed=embed)
+                    WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
+        
     await bot.process_commands(message)
 
 @bot.command(name='cmds')
@@ -224,6 +247,7 @@ async def show_commands(ctx):
 **Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
+`/warning-mention status:[On/Off]` - Toggle mention warnings On or Off
 `/deobf-file file:` - Deobfuscate uploaded .lua file
 `/create-ticket` - Create a ticket panel
 `/create-embed` - Create a custom embed
