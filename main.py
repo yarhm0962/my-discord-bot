@@ -24,8 +24,8 @@ def keep_alive(): Thread(target=run).start()
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # ⚠️ REQUIRED for the /add verify command to loop through all server members
-intents.guilds = True  # Required for member join events
+intents.members = True
+intents.guilds = True
 
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
@@ -54,8 +54,9 @@ TIMEOUT_DURATION = 300
 MENTION_WARNINGS_ENABLED = True
 IGNORED_WARNING_CHANNELS = set()
 IGNORED_WARNING_ROLES = set()
+PROTECTED_ROLES = set()  # Roles that trigger warnings when mentioned
 TALKING_CHANNELS = {}
-VERIFIED_ROLE_CACHE = {}  # Cache for verified role per guild
+VERIFIED_ROLE_CACHE = {}
 
 def parse_time(time_str):
     if not time_str:
@@ -230,32 +231,21 @@ async def schedule_auto_purge(channel_id):
 
 @bot.event
 async def on_member_join(member):
-    """Automatically assign 'Not Verified' role to new members if verification system is set up"""
     if member.bot:
         return
-    
-    # Check if this guild has a verified role cached
     if member.guild.id not in VERIFIED_ROLE_CACHE:
         return
-    
     verified_role = VERIFIED_ROLE_CACHE[member.guild.id]
     not_verified_role = discord.utils.get(member.guild.roles, name="Not Verified")
-    
-    # If the Not Verified role doesn't exist or the member already has verified role, skip
     if not not_verified_role or verified_role in member.roles:
         return
-    
     try:
         await member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role on join")
-        print(f"✅ Assigned 'Not Verified' role to {member.name} in {member.guild.name}")
-    except discord.Forbidden:
-        print(f"❌ Missing permission to assign 'Not Verified' role to {member.name}")
-    except Exception as e:
-        print(f"❌ Error assigning 'Not Verified' role to {member.name}: {e}")
+    except:
+        pass
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    # Handle the verification button globally so it survives bot restarts
     if interaction.type == discord.InteractionType.component:
         custom_id = interaction.data.get("custom_id", "")
         if custom_id.startswith("verify_btn_"):
@@ -263,14 +253,11 @@ async def on_interaction(interaction: discord.Interaction):
                 role_id = int(custom_id.split("_")[2])
                 verified_role = interaction.guild.get_role(role_id)
                 not_verified_role = discord.utils.get(interaction.guild.roles, name="Not Verified")
-
                 if not verified_role:
                     return await interaction.response.send_message("❌ Error: The verified role no longer exists.", ephemeral=True)
-
                 await interaction.user.add_roles(verified_role)
                 if not_verified_role and not_verified_role in interaction.user.roles:
                     await interaction.user.remove_roles(not_verified_role)
-
                 await interaction.response.send_message("✅ You have been successfully verified!", ephemeral=True)
             except discord.Forbidden:
                 await interaction.response.send_message("❌ Error: I don't have permission to manage roles. Please ask an admin to move my bot role higher.", ephemeral=True)
@@ -279,22 +266,16 @@ async def on_interaction(interaction: discord.Interaction):
 
 @instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
 async def instant_permissions(interaction: discord.Interaction):
-    """Disable Send Messages, Send Messages in Threads, Create Public Threads, and Create Private Threads for @everyone in all channels"""
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Error: Administrator permission is required to use this command.", ephemeral=True)
     
     await interaction.response.defer(ephemeral=True)
-    
-    # Get the @everyone role
     everyone_role = interaction.guild.default_role
-    
     updated_channels = 0
     failed_channels = []
     
-    # Loop through all channels in the guild
     for channel in interaction.guild.channels:
         try:
-            # Only apply to text channels (including forums and threads)
             if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.Thread)):
                 await channel.set_permissions(
                     everyone_role,
@@ -304,11 +285,10 @@ async def instant_permissions(interaction: discord.Interaction):
                     create_private_threads=False
                 )
                 updated_channels += 1
-                await asyncio.sleep(0.1)  # Prevent rate limiting
+                await asyncio.sleep(0.1)
         except Exception as e:
             failed_channels.append(f"{channel.name} ({str(e)})")
     
-    # Create response embed
     embed = discord.Embed(
         title="⚡ Instant Permissions Applied",
         description=f"Successfully disabled messaging permissions for **@everyone** in **{updated_channels}** channels.",
@@ -347,11 +327,8 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
-
-    # Cache the verified role for this guild
     VERIFIED_ROLE_CACHE[interaction.guild.id] = role
 
-    # 1. Check for or create the "Not Verified" role
     not_verified_role = discord.utils.get(interaction.guild.roles, name="Not Verified")
     if not not_verified_role:
         try:
@@ -365,7 +342,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         except Exception as e:
             return await interaction.followup.send(f"❌ Error creating 'Not Verified' role: {str(e)}")
 
-    # 2. Make the verification channel strictly Read-Only for @everyone
     try:
         await enabled_channel.set_permissions(
             interaction.guild.default_role,
@@ -377,13 +353,9 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     except Exception:
         pass
 
-    # 3. Update Channel Permissions 
-    # Hides all channels from "Not Verified", except the enabled_channel (and forces read-only on it)
     for ch in interaction.guild.channels:
         try:
             if ch.id == enabled_channel.id:
-                # For the verification channel, use the full set of permissions
-                # Check if it's a text channel before using thread permissions
                 if isinstance(ch, discord.TextChannel):
                     await ch.set_permissions(
                         not_verified_role, 
@@ -395,7 +367,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
                         create_private_threads=False
                     )
                 else:
-                    # For non-text channels, just set basic permissions
                     await ch.set_permissions(
                         not_verified_role,
                         view_channel=True,
@@ -403,46 +374,34 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
                         send_messages=False
                     )
             else:
-                # For other channels, just hide them
                 await ch.set_permissions(not_verified_role, view_channel=False)
-            await asyncio.sleep(0.05) # Prevent Discord API rate limits
+            await asyncio.sleep(0.05)
         except Exception:
-            pass # Ignore channels the bot cannot edit
+            pass
 
-    # 4. Add "Not Verified" to everyone who is missing the verified role - FAST VERSION
     assigned_count = 0
     failed_members = []
-    
-    # Gather all members who need the role
     members_to_update = []
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
             members_to_update.append(member)
     
-    # Process members in batches to avoid rate limits while being fast
-    batch_size = 10  # Process 10 members at a time
+    batch_size = 10
     for i in range(0, len(members_to_update), batch_size):
         batch = members_to_update[i:i + batch_size]
         tasks = []
         for member in batch:
             task = member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role")
             tasks.append(task)
-        
-        # Wait for all tasks in this batch to complete
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Count successes and failures
         for result in results:
             if isinstance(result, Exception):
                 failed_members.append(str(result))
             else:
                 assigned_count += 1
-        
-        # Small delay between batches to prevent rate limiting
         if i + batch_size < len(members_to_update):
             await asyncio.sleep(0.5)
 
-    # 5. Create and send the Verification Embed to the specified channel
     embed = discord.Embed(
         title="🔐 Server Verification",
         description=(
@@ -465,7 +424,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
 
     await enabled_channel.send(embed=embed, view=view)
     
-    # Send completion message with stats
     success_message = f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
     success_message += f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
     if failed_members:
@@ -522,14 +480,15 @@ async def setup_talking_bot(interaction: discord.Interaction, status: app_comman
 @app_commands.describe(
     status="Select whether to turn mention warnings On or Off",
     ignored_channel="Optional: Select a channel where mention warnings will be ignored",
-    ignored_role="Optional: Select a role that will bypass mention warnings"
+    ignored_role="Optional: Select a role that will bypass mention warnings",
+    protected_role="Optional: Add/remove a role that triggers warnings when mentioned"
 )
-@app_commands.rename(ignored_channel="ignored-channel", ignored_role="ignore-role")
+@app_commands.rename(ignored_channel="ignored-channel", ignored_role="ignore-role", protected_role="protected-role")
 @app_commands.choices(status=[
     app_commands.Choice(name="On", value="on"),
     app_commands.Choice(name="Off", value="off")
 ])
-async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str], ignored_channel: discord.TextChannel = None, ignored_role: discord.Role = None):
+async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str], ignored_channel: discord.TextChannel = None, ignored_role: discord.Role = None, protected_role: discord.Role = None):
     global MENTION_WARNINGS_ENABLED
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to change this setting.", ephemeral=True)
@@ -552,20 +511,43 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
             IGNORED_WARNING_ROLES.add(ignored_role.id)
             role_msg = f"\n\n🚫 **Ignored Role:** Members with the {ignored_role.mention} role will bypass warnings."
 
+    protected_msg = ""
+    if protected_role:
+        if protected_role.id in PROTECTED_ROLES:
+            PROTECTED_ROLES.remove(protected_role.id)
+            protected_msg = f"\n\n✅ **Removed Protected Role:** {protected_role.mention} will no longer trigger warnings when mentioned."
+        else:
+            PROTECTED_ROLES.add(protected_role.id)
+            protected_msg = f"\n\n🛡️ **Added Protected Role:** {protected_role.mention} will now trigger warnings when mentioned."
+
     if status.value == "on":
         MENTION_WARNINGS_ENABLED = True
         embed = discord.Embed(
             title="⚙️ Mention Protection Enabled",
-            description=f"Warnings for mentioning the highest role are now **ON**.{channel_msg}{role_msg}",
+            description=f"Warnings for mentioning the highest role are now **ON**.{channel_msg}{role_msg}{protected_msg}",
             color=discord.Colour.green()
         )
     else:
         MENTION_WARNINGS_ENABLED = False
         embed = discord.Embed(
             title="⚙️ Mention Protection Disabled",
-            description=f"Warnings for mentioning the highest role are now **OFF** globally.{channel_msg}{role_msg}",
+            description=f"Warnings for mentioning the highest role are now **OFF** globally.{channel_msg}{role_msg}{protected_msg}",
             color=discord.Colour.red()
         )
+    
+    # Show current protected roles
+    if PROTECTED_ROLES:
+        role_list = []
+        for role_id in PROTECTED_ROLES:
+            role = interaction.guild.get_role(role_id)
+            if role:
+                role_list.append(f"• {role.mention}")
+        if role_list:
+            embed.add_field(
+                name="🛡️ Current Protected Roles",
+                value="\n".join(role_list),
+                inline=False
+            )
         
     await interaction.response.send_message(embed=embed)
 
@@ -644,23 +626,66 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
-    # MENTION WARNINGS - FIXED: Now warns ANYONE who mentions the highest role
-    # regardless of their permissions (except ignored roles)
-    if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        # Check if the message AUTHOR has an ignored role
+    # Check for protected role mentions
+    if PROTECTED_ROLES and message.channel.id not in IGNORED_WARNING_CHANNELS:
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
-        # Only skip if the author has an ignored role
-        # This means: NO admin bypass - EVERYONE gets warned unless they have an ignored role
+        if not has_ignored_role:
+            mentioned_protected = False
+            for role_mention in message.role_mentions:
+                if role_mention.id in PROTECTED_ROLES:
+                    mentioned_protected = True
+                    break
+            
+            if not mentioned_protected:
+                for user in message.mentions:
+                    for role in user.roles:
+                        if role.id in PROTECTED_ROLES:
+                            mentioned_protected = True
+                            break
+                    if mentioned_protected:
+                        break
+            
+            if mentioned_protected:
+                guild_id = message.guild.id
+                user_id = message.author.id
+                WARNINGS.setdefault(guild_id, {})
+                WARNINGS[guild_id].setdefault(user_id, 0)
+                WARNINGS[guild_id][user_id] += 1
+                count = WARNINGS[guild_id][user_id]
+                
+                if count == 1:
+                    embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
+                    embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning a protected role.\nPlease avoid doing this again."
+                    await message.channel.send(embed=embed)
+                elif count == 2:
+                    embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
+                    embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning a protected role.\nYou will be timed out after the next warning!"
+                    await message.channel.send(embed=embed)
+                elif count >= 3:
+                    try:
+                        await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned protected role 3 times")
+                        embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
+                        embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning a protected role.\n\n⚠️ **Your warnings have been reset.**"
+                        await message.channel.send(embed=embed)
+                        WARNINGS[guild_id][user_id] = 0
+                    except Exception as e:
+                        embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
+                        embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning protected roles.\n\n⚠️ **Your warnings have been reset.**"
+                        await message.channel.send(embed=embed)
+                        WARNINGS[guild_id][user_id] = 0
+
+    # Check for highest role mentions
+    if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
+        has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
+        
         if not has_ignored_role:
             highest_role = max(message.guild.roles, key=lambda r: r.position)
             
             mentioned_highest = False
-            # Check if the highest role was mentioned directly
             if highest_role in message.role_mentions:
                 mentioned_highest = True
             else:
-                # Check if any mentioned user has the highest role
                 for user in message.mentions:
                     if highest_role in user.roles:
                         mentioned_highest = True
@@ -707,6 +732,7 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Auto-Features", value="""
 **Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
+**Protected Roles** - Set specific roles that trigger warnings when mentioned (via /warning mention)
 **AI Talking Bot** - Chats contextually in designated channels
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
@@ -714,7 +740,7 @@ async def show_commands(ctx):
 `/talking bot status:[On/Off] [channel:]` - Set up a channel where the bot will chat using AI
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
-`/warning mention status:[On/Off] [ignored-channel:] [ignore-role:]` - Toggle mention warnings and exclude specific channels or roles
+`/warning mention status:[On/Off] [ignored-channel:] [ignore-role:] [protected-role:]` - Toggle mention warnings, exclude channels/roles, and protect roles
 `/deobf file file:` - Deobfuscate uploaded .lua file
 `/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket` - Create a ticket panel
