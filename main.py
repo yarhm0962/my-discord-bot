@@ -644,17 +644,23 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
+    # MENTION WARNINGS - FIXED: Now warns ANYONE who mentions the highest role
+    # regardless of their permissions (except ignored roles)
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        is_admin = message.author.guild_permissions.administrator
+        # Check if the message AUTHOR has an ignored role
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
-        if not is_admin and not has_ignored_role:
+        # Only skip if the author has an ignored role
+        # This means: NO admin bypass - EVERYONE gets warned unless they have an ignored role
+        if not has_ignored_role:
             highest_role = max(message.guild.roles, key=lambda r: r.position)
             
             mentioned_highest = False
+            # Check if the highest role was mentioned directly
             if highest_role in message.role_mentions:
                 mentioned_highest = True
             else:
+                # Check if any mentioned user has the highest role
                 for user in message.mentions:
                     if highest_role in user.roles:
                         mentioned_highest = True
