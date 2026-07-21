@@ -26,6 +26,7 @@ TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
 MENTION_WARNINGS_ENABLED = True  # Default state for highest role mention warnings
+IGNORED_WARNING_CHANNELS = set()  # Store channel IDs where mention warnings are disabled
 
 def parse_time(time_str):
     if not time_str:
@@ -170,30 +171,48 @@ async def say_message(interaction: discord.Interaction, message: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to use this command.", ephemeral=True)
     
-    # Confirm command execution ephemerally so command stays hidden
     await interaction.response.send_message("Message sent successfully!", ephemeral=True)
-    
-    # Send message with all user/role mentions enabled
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
 
 @tree.command(name="warning-mention", description="Toggle mention warnings for the highest role On or Off")
-@app_commands.describe(status="Select whether to turn mention warnings On or Off")
+@app_commands.describe(
+    status="Select whether to turn mention warnings On or Off",
+    ignored_channel="Optional: Select a channel where mention warnings will be ignored"
+)
 @app_commands.choices(status=[
     app_commands.Choice(name="On", value="on"),
     app_commands.Choice(name="Off", value="off")
 ])
-async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str]):
+async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str], ignored_channel: discord.TextChannel = None):
     global MENTION_WARNINGS_ENABLED
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to change this setting.", ephemeral=True)
     
     if status.value == "on":
         MENTION_WARNINGS_ENABLED = True
-        embed = discord.Embed(title="⚙️ Mention Protection Enabled", description="Warnings for mentioning the highest role are now **ON**.", color=discord.Colour.green())
+        if ignored_channel:
+            IGNORED_WARNING_CHANNELS.add(ignored_channel.id)
+            embed = discord.Embed(
+                title="⚙️ Mention Protection Enabled",
+                description=f"Warnings for mentioning the highest role are now **ON**.\n\n🚫 **Ignored Channel:** Mentions in {ignored_channel.mention} will be **ignored**.",
+                color=discord.Colour.green()
+            )
+        else:
+            embed = discord.Embed(
+                title="⚙️ Mention Protection Enabled",
+                description="Warnings for mentioning the highest role are now **ON** for all channels.",
+                color=discord.Colour.green()
+            )
     else:
         MENTION_WARNINGS_ENABLED = False
-        embed = discord.Embed(title="⚙️ Mention Protection Disabled", description="Warnings for mentioning the highest role are now **OFF**.", color=discord.Colour.red())
+        if ignored_channel and ignored_channel.id in IGNORED_WARNING_CHANNELS:
+            IGNORED_WARNING_CHANNELS.remove(ignored_channel.id)
+        embed = discord.Embed(
+            title="⚙️ Mention Protection Disabled",
+            description="Warnings for mentioning the highest role are now **OFF** globally.",
+            color=discord.Colour.red()
+        )
         
     await interaction.response.send_message(embed=embed)
 
@@ -202,8 +221,8 @@ async def on_message(message):
     if message.author.bot or not message.guild:
         return await bot.process_commands(message)
     
-    # Check if mention warnings are enabled globally
-    if MENTION_WARNINGS_ENABLED:
+    # Check if mention warnings are enabled globally and channel is not ignored
+    if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
         # Get highest role in server
         highest_role = max(message.guild.roles, key=lambda r: r.position)
         
@@ -261,7 +280,7 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/say message:` - Send a custom message as the bot with mentions
-`/warning-mention status:[On/Off]` - Toggle mention warnings On or Off
+`/warning-mention status:[On/Off] [ignored_channel:]` - Toggle mention warnings and exclude specific channels
 `/deobf-file file:` - Deobfuscate uploaded .lua file
 `/create-ticket` - Create a ticket panel
 `/create-embed` - Create a custom embed
