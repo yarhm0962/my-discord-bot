@@ -68,13 +68,25 @@ PROTECTED_ROLES = set()
 TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
 
-# Initialize Groq client
+# Initialize Groq client - Fixed version
 GROQ_API_KEY = "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"
 groq_client = None
 if HAS_GROQ and GROQ_API_KEY:
     try:
         groq_client = Groq(api_key=GROQ_API_KEY)
         print("✅ Groq client initialized successfully")
+    except TypeError as e:
+        if "proxies" in str(e):
+            print("⚠️ Groq version compatibility issue, trying fallback...")
+            try:
+                groq_client = Groq(api_key=GROQ_API_KEY)
+                print("✅ Groq client initialized with fallback")
+            except Exception as e2:
+                print(f"❌ Failed to initialize Groq client: {e2}")
+                groq_client = None
+        else:
+            print(f"❌ Failed to initialize Groq client: {e}")
+            groq_client = None
     except Exception as e:
         print(f"❌ Failed to initialize Groq client: {e}")
         groq_client = None
