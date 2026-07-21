@@ -425,7 +425,7 @@ async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment
 class CloseTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    @discord.ui.button(label="Close Ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings = TICKET_SETTINGS.get(interaction.channel.id)
         if not settings:
@@ -437,6 +437,24 @@ class CloseTicketView(discord.ui.View):
         await interaction.response.send_message("Closing ticket in 3 seconds...")
         await asyncio.sleep(3)
         await interaction.channel.delete()
+
+    @discord.ui.button(label="Claim Ticket", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="claim_ticket_btn")
+    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = TICKET_SETTINGS.get(interaction.channel.id)
+        if not settings:
+            return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
+        staff_role = interaction.guild.get_role(settings["admin_role_id"])
+        is_staff = staff_role in interaction.user.roles if staff_role else False
+        if not (is_staff or interaction.user.guild_permissions.administrator):
+            return await interaction.response.send_message("Error: Only an admin/staff member can claim this ticket", ephemeral=True)
+        creator_id = settings.get("creator_id")
+        creator_mention = f"<@{creator_id}>" if creator_id else ""
+        claim_embed = discord.Embed(
+            title="🎫 Ticket Claimed",
+            description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
+            color=discord.Colour.yellow()
+        )
+        await interaction.response.send_message(content=creator_mention, embed=claim_embed)
 
 @create_group.command(name="ticket", description="Create a ticket panel")
 @app_commands.describe(
@@ -458,7 +476,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     class TicketPanel(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
-        @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.success, custom_id="create_ticket_btn")
+        @discord.ui.button(label="Create Ticket", emoji="🎟️", style=discord.ButtonStyle.success, custom_id="create_ticket_btn")
         async def create_btn(self, btn_interaction: discord.Interaction, button: discord.ui.Button):
             settings = TICKET_SETTINGS.get(btn_interaction.channel_id)
             if not settings:
@@ -494,9 +512,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             }
             ticket_embed = discord.Embed(title="Ticket Created", description="**Please wait for a staff member to assist you**", color=discord.Colour.green())
             ticket_embed.add_field(name="Created By", value=btn_interaction.user.mention, inline=False)
-            ticket_embed.add_field(name="Staff", value=staff_role.mention, inline=False)
-            ticket_embed.add_field(name="Access", value="Only you and staff members can view this ticket", inline=False)
-            ticket_embed.add_field(name="Actions", value="Click Close Ticket to close this channel", inline=False)
             await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
             await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
     embed = discord.Embed(description=panel_description, color=embed_color)
@@ -505,13 +520,19 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
 @create_group.command(name="embed", description="Create a custom embed")
 @app_commands.describe(
     description="Required: The embed description text",
+    title="Optional: The embed title",
+    footer="Optional: The embed footer text",
     color="Optional: Embed color (name or hex, default: green)"
 )
-async def create_embed(interaction: discord.Interaction, description: str, color: str = "green"):
+async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", color: str = "green"):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
     embed_color = get_color(color)
     embed = discord.Embed(description=description, color=embed_color)
+    if title:
+        embed.title = title
+    if footer:
+        embed.set_footer(text=footer)
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="ban", description="Ban a user from the server")
