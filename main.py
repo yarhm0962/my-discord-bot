@@ -422,39 +422,45 @@ async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment
     await interaction.followup.send(content="Success: File deobfuscated successfully", file=File(filename))
     os.remove(filename)
 
-class CloseTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    @discord.ui.button(label="Close Ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
-    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = TICKET_SETTINGS.get(interaction.channel.id)
-        if not settings:
-            return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
-        staff_role = interaction.guild.get_role(settings["admin_role_id"])
-        is_staff = staff_role in interaction.user.roles if staff_role else False
-        if not (is_staff or interaction.user.guild_permissions.manage_channels):
-            return await interaction.response.send_message("Error: You do not have permission to close this ticket", ephemeral=True)
-        await interaction.response.send_message("Closing ticket in 3 seconds...")
-        await asyncio.sleep(3)
-        await interaction.channel.delete()
+async def close_ticket_callback(interaction: discord.Interaction):
+    settings = TICKET_SETTINGS.get(interaction.channel.id)
+    if not settings:
+        return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
+    staff_role = interaction.guild.get_role(settings["admin_role_id"])
+    is_staff = staff_role in interaction.user.roles if staff_role else False
+    if not (is_staff or interaction.user.guild_permissions.manage_channels):
+        return await interaction.response.send_message("Error: You do not have permission to close this ticket", ephemeral=True)
+    await interaction.response.send_message("Closing ticket in 3 seconds...")
+    await asyncio.sleep(3)
+    await interaction.channel.delete()
 
-    @discord.ui.button(label="Claim Ticket", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="claim_ticket_btn")
-    async def claim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        settings = TICKET_SETTINGS.get(interaction.channel.id)
-        if not settings:
-            return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
-        staff_role = interaction.guild.get_role(settings["admin_role_id"])
-        is_staff = staff_role in interaction.user.roles if staff_role else False
-        if not (is_staff or interaction.user.guild_permissions.administrator):
-            return await interaction.response.send_message("Error: Only an admin/staff member can claim this ticket", ephemeral=True)
-        creator_id = settings.get("creator_id")
-        creator_mention = f"<@{creator_id}>" if creator_id else ""
-        claim_embed = discord.Embed(
-            title="🎫 Ticket Claimed",
-            description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
-            color=discord.Colour.yellow()
-        )
-        await interaction.response.send_message(content=creator_mention, embed=claim_embed)
+async def claim_ticket_callback(interaction: discord.Interaction):
+    settings = TICKET_SETTINGS.get(interaction.channel.id)
+    if not settings:
+        return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
+    staff_role = interaction.guild.get_role(settings["admin_role_id"])
+    is_staff = staff_role in interaction.user.roles if staff_role else False
+    if not (is_staff or interaction.user.guild_permissions.administrator):
+        return await interaction.response.send_message("Error: Only an admin/staff member can claim this ticket", ephemeral=True)
+    creator_id = settings.get("creator_id")
+    creator_mention = f"<@{creator_id}>" if creator_id else ""
+    claim_embed = discord.Embed(
+        title="🎫 Ticket Claimed",
+        description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
+        color=discord.Colour.yellow()
+    )
+    await interaction.response.send_message(content=creator_mention, embed=claim_embed)
+
+def build_ticket_actions_view(include_claim: bool = True):
+    view = discord.ui.View(timeout=None)
+    close_btn = discord.ui.Button(label="Close Ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    close_btn.callback = close_ticket_callback
+    view.add_item(close_btn)
+    if include_claim:
+        claim_btn = discord.ui.Button(label="Claim Ticket", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="claim_ticket_btn")
+        claim_btn.callback = claim_ticket_callback
+        view.add_item(claim_btn)
+    return view
 
 @create_group.command(name="ticket", description="Create a ticket panel")
 @app_commands.describe(
@@ -464,9 +470,12 @@ class CloseTicketView(discord.ui.View):
     title="Optional: Panel embed title",
     footer="Optional: Panel embed footer text",
     image="Optional: A large image to display on the panel embed",
-    color="Optional: Panel embed color (name or hex, default: green)"
+    color="Optional: Panel embed color (name or hex, default: green)",
+    enable_claim_button="Optional: Toggle the Claim Ticket button inside tickets (default: On)",
+    button_label="Optional: Text for the ticket creation button (default: Create Ticket)",
+    button_emoji="Optional: Emoji for the ticket creation button (default: 🎟️)"
 )
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green"):
+async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", enable_claim_button: bool = True, button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required", ephemeral=True)
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
@@ -474,49 +483,54 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     TICKET_SETTINGS[interaction.channel.id] = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
-        "guild_id": interaction.guild.id
+        "guild_id": interaction.guild.id,
+        "enable_claim_button": enable_claim_button
     }
-    class TicketPanel(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-        @discord.ui.button(label="Create Ticket", emoji="🎟️", style=discord.ButtonStyle.success, custom_id="create_ticket_btn")
-        async def create_btn(self, btn_interaction: discord.Interaction, button: discord.ui.Button):
-            settings = TICKET_SETTINGS.get(btn_interaction.channel_id)
-            if not settings:
-                return await btn_interaction.response.send_message("Error: Panel is not configured properly", ephemeral=True)
-            guild = btn_interaction.guild
-            ticket_category = guild.get_channel(settings["category_id"])
-            staff_role = guild.get_role(settings["admin_role_id"])
-            if not ticket_category or not staff_role:
-                return await btn_interaction.response.send_message("Error: Category or Admin Role was not found", ephemeral=True)
-            
-            # --- PREVENT DUPLICATE OPEN TICKETS ---
-            for ch_id, ch_data in list(TICKET_SETTINGS.items()):
-                if isinstance(ch_data, dict) and ch_data.get("creator_id") == btn_interaction.user.id:
-                    existing_channel = guild.get_channel(ch_id)
-                    if existing_channel:
-                        return await btn_interaction.response.send_message(
-                            f"⚠️ You already have an open ticket: {existing_channel.mention}. Please close it before opening a new one.",
-                            ephemeral=True
-                        )
 
-            channel_name = f"{btn_interaction.user.name}-ticket"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                btn_interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-            }
-            ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites)
-            TICKET_SETTINGS[ticket_channel.id] = {
-                "admin_role_id": admin_role.id,
-                "creator_id": btn_interaction.user.id,
-                "category_id": category.id
-            }
-            ticket_embed = discord.Embed(title="Ticket Created", description="**Please wait for a staff member to assist you**", color=discord.Colour.green())
-            ticket_embed.add_field(name="Created By", value=btn_interaction.user.mention, inline=False)
-            await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
-            await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
+    async def create_ticket_callback(btn_interaction: discord.Interaction):
+        settings = TICKET_SETTINGS.get(btn_interaction.channel_id)
+        if not settings:
+            return await btn_interaction.response.send_message("Error: Panel is not configured properly", ephemeral=True)
+        guild = btn_interaction.guild
+        ticket_category = guild.get_channel(settings["category_id"])
+        staff_role = guild.get_role(settings["admin_role_id"])
+        if not ticket_category or not staff_role:
+            return await btn_interaction.response.send_message("Error: Category or Admin Role was not found", ephemeral=True)
+
+        # --- PREVENT DUPLICATE OPEN TICKETS ---
+        for ch_id, ch_data in list(TICKET_SETTINGS.items()):
+            if isinstance(ch_data, dict) and ch_data.get("creator_id") == btn_interaction.user.id:
+                existing_channel = guild.get_channel(ch_id)
+                if existing_channel:
+                    return await btn_interaction.response.send_message(
+                        f"⚠️ You already have an open ticket: {existing_channel.mention}. Please close it before opening a new one.",
+                        ephemeral=True
+                    )
+
+        channel_name = f"{btn_interaction.user.name}-ticket"
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            btn_interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        }
+        ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites)
+        TICKET_SETTINGS[ticket_channel.id] = {
+            "admin_role_id": admin_role.id,
+            "creator_id": btn_interaction.user.id,
+            "category_id": category.id,
+            "enable_claim_button": enable_claim_button
+        }
+        ticket_embed = discord.Embed(title="Ticket Created", description="**Please wait for a staff member to assist you**", color=discord.Colour.green())
+        ticket_embed.add_field(name="Created By", value=btn_interaction.user.mention, inline=False)
+        await ticket_channel.send(embed=ticket_embed, view=build_ticket_actions_view(enable_claim_button))
+        await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
+
+    panel_view = discord.ui.View(timeout=None)
+    create_btn = discord.ui.Button(label=button_label, emoji=button_emoji, style=discord.ButtonStyle.success, custom_id="create_ticket_btn")
+    create_btn.callback = create_ticket_callback
+    panel_view.add_item(create_btn)
+
     embed = discord.Embed(description=panel_description, color=embed_color)
     if title:
         embed.title = title
@@ -525,7 +539,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     if image:
         embed.set_image(url=image.url)
     await interaction.response.send_message("Ticket panel created!", ephemeral=True)
-    await interaction.channel.send(embed=embed, view=TicketPanel())
+    await interaction.channel.send(embed=embed, view=panel_view)
 
 @create_group.command(name="embed", description="Create a custom embed")
 @app_commands.describe(
