@@ -303,7 +303,8 @@ async def instant_permissions(interaction: discord.Interaction):
                     create_private_threads=False
                 )
                 updated_channels += 1
-                await asyncio.sleep(0.1)
+                # Increased delay to avoid rate limits
+                await asyncio.sleep(0.5)
         except Exception as e:
             failed_channels.append(f"{channel.name} ({str(e)})")
     
@@ -371,55 +372,76 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     except Exception:
         pass
 
-    for ch in interaction.guild.channels:
-        try:
-            if ch.id == enabled_channel.id:
-                if isinstance(ch, discord.TextChannel):
-                    await ch.set_permissions(
-                        not_verified_role, 
-                        view_channel=True, 
-                        read_message_history=True, 
-                        send_messages=False,
-                        send_messages_in_threads=False,
-                        create_public_threads=False,
-                        create_private_threads=False
-                    )
+    # 3. Update Channel Permissions - FIXED with proper rate limiting
+    # Use asyncio.gather with semaphore to control concurrent requests
+    semaphore = asyncio.Semaphore(5)  # Allow 5 concurrent channel updates max
+    
+    async def update_channel_permissions(ch):
+        async with semaphore:
+            try:
+                if ch.id == enabled_channel.id:
+                    if isinstance(ch, discord.TextChannel):
+                        await ch.set_permissions(
+                            not_verified_role, 
+                            view_channel=True, 
+                            read_message_history=True, 
+                            send_messages=False,
+                            send_messages_in_threads=False,
+                            create_public_threads=False,
+                            create_private_threads=False
+                        )
+                    else:
+                        await ch.set_permissions(
+                            not_verified_role,
+                            view_channel=True,
+                            read_message_history=True,
+                            send_messages=False
+                        )
                 else:
-                    await ch.set_permissions(
-                        not_verified_role,
-                        view_channel=True,
-                        read_message_history=True,
-                        send_messages=False
-                    )
-            else:
-                await ch.set_permissions(not_verified_role, view_channel=False)
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
+                    await ch.set_permissions(not_verified_role, view_channel=False)
+                # Small delay between each channel
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+    
+    # Create tasks for all channels
+    tasks = [update_channel_permissions(ch) for ch in interaction.guild.channels]
+    await asyncio.gather(*tasks)
 
+    # 4. Add "Not Verified" to everyone who is missing the verified role - FIXED
     assigned_count = 0
     failed_members = []
+    
+    # Gather all members who need the role
     members_to_update = []
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
             members_to_update.append(member)
     
-    batch_size = 10
+    # Process members in smaller batches with more delays
+    batch_size = 5  # Reduced batch size from 10 to 5
     for i in range(0, len(members_to_update), batch_size):
         batch = members_to_update[i:i + batch_size]
         tasks = []
         for member in batch:
             task = member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role")
             tasks.append(task)
+        
+        # Wait for all tasks in this batch to complete
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Count successes and failures
         for result in results:
             if isinstance(result, Exception):
                 failed_members.append(str(result))
             else:
                 assigned_count += 1
+        
+        # Longer delay between batches to respect rate limits
         if i + batch_size < len(members_to_update):
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)  # Increased from 0.5 to 1.0
 
+    # 5. Create and send the Verification Embed to the specified channel
     embed = discord.Embed(
         title="🔐 Server Verification",
         description=(
@@ -442,6 +464,7 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
 
     await enabled_channel.send(embed=embed, view=view)
     
+    # Send completion message with stats
     success_message = f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
     success_message += f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
     if failed_members:
