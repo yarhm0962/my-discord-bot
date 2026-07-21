@@ -10,14 +10,6 @@ from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
 
-# Try to import Groq
-try:
-    from groq import Groq
-    HAS_GROQ = True
-except ImportError:
-    HAS_GROQ = False
-    Groq = None
-
 app = Flask('')
 
 @app.route('/')
@@ -43,7 +35,6 @@ tree = bot.tree
 create_group = app_commands.Group(name="create", description="Commands for creation")
 warning_group = app_commands.Group(name="warning", description="Warning system commands")
 deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
-talking_group = app_commands.Group(name="talking", description="Commands for the AI chatbot")
 auto_group = app_commands.Group(name="auto", description="Automation commands")
 auto_purge_group = app_commands.Group(name="purge", description="Auto purge commands", parent=auto_group)
 add_group = app_commands.Group(name="add", description="Add server features")
@@ -52,7 +43,6 @@ instant_group = app_commands.Group(name="instant", description="Instant permissi
 tree.add_command(create_group)
 tree.add_command(warning_group)
 tree.add_command(deobf_group)
-tree.add_command(talking_group)
 tree.add_command(auto_group)
 tree.add_command(add_group)
 tree.add_command(instant_group)
@@ -65,36 +55,7 @@ MENTION_WARNINGS_ENABLED = True
 IGNORED_WARNING_CHANNELS = set()
 IGNORED_WARNING_ROLES = set()
 PROTECTED_ROLES = set()
-TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
-
-# Initialize Groq client - Fixed version
-GROQ_API_KEY = "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"
-groq_client = None
-if HAS_GROQ and GROQ_API_KEY:
-    try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        print("✅ Groq client initialized successfully")
-    except TypeError as e:
-        if "proxies" in str(e):
-            print("⚠️ Groq version compatibility issue, trying fallback...")
-            try:
-                groq_client = Groq(api_key=GROQ_API_KEY)
-                print("✅ Groq client initialized with fallback")
-            except Exception as e2:
-                print(f"❌ Failed to initialize Groq client: {e2}")
-                groq_client = None
-        else:
-            print(f"❌ Failed to initialize Groq client: {e}")
-            groq_client = None
-    except Exception as e:
-        print(f"❌ Failed to initialize Groq client: {e}")
-        groq_client = None
-else:
-    if not HAS_GROQ:
-        print("❌ Groq package not installed. Run: pip install groq")
-    if not GROQ_API_KEY:
-        print("❌ Groq API key not found")
 
 def parse_time(time_str):
     if not time_str:
@@ -493,48 +454,6 @@ async def say_message(interaction: discord.Interaction, message: str):
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
 
-@talking_group.command(name="bot", description="Toggle the AI talking bot in a specific channel")
-@app_commands.describe(
-    status="Select whether to turn the bot On or Off",
-    channel="Required if On: The channel where the bot will reply to user messages"
-)
-@app_commands.choices(status=[
-    app_commands.Choice(name="On", value="on"),
-    app_commands.Choice(name="Off", value="off")
-])
-async def setup_talking_bot(interaction: discord.Interaction, status: app_commands.Choice[str], channel: discord.TextChannel = None):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
-    
-    if status.value == "on":
-        if not channel:
-            return await interaction.response.send_message("❌ Error: You must provide a channel when turning the bot On.", ephemeral=True)
-        TALKING_CHANNELS[interaction.guild.id] = channel.id
-        
-        status_msg = ""
-        if not HAS_GROQ:
-            status_msg = "\n\n⚠️ **Warning:** Groq package is not installed. Run `pip install groq` to fix this."
-        elif not groq_client:
-            status_msg = "\n\n⚠️ **Warning:** Groq client failed to initialize. Check your API key."
-        else:
-            status_msg = "\n\n✅ **Groq API is ready!** The bot will respond with humor and knowledge!"
-        
-        embed = discord.Embed(
-            title="🤖 Talking Bot Enabled", 
-            description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.{status_msg}", 
-            color=discord.Colour.blue()
-        )
-    else:
-        if interaction.guild.id in TALKING_CHANNELS:
-            del TALKING_CHANNELS[interaction.guild.id]
-        embed = discord.Embed(
-            title="🤖 Talking Bot Disabled", 
-            description="The AI chatbot has been turned off for this server.", 
-            color=discord.Colour.red()
-        )
-        
-    await interaction.response.send_message(embed=embed)
-
 @warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(
     status="Select whether to turn mention warnings On or Off",
@@ -641,112 +560,6 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
 async def on_message(message):
     if message.author.bot or not message.guild:
         return await bot.process_commands(message)
-
-    if message.guild.id in TALKING_CHANNELS and message.channel.id == TALKING_CHANNELS[message.guild.id]:
-        if not message.content.startswith(bot.command_prefix):
-            async with message.channel.typing():
-                if HAS_GROQ and groq_client:
-                    try:
-                        guild = message.guild
-                        member_count = guild.member_count
-                        guild_name = guild.name
-                        guild_id = guild.id
-                        guild_created = guild.created_at.strftime("%B %d, %Y")
-                        channel_name = message.channel.name
-                        channel_id = message.channel.id
-                        
-                        text_channels = len([c for c in guild.channels if isinstance(c, discord.TextChannel)])
-                        voice_channels = len([c for c in guild.channels if isinstance(c, discord.VoiceChannel)])
-                        categories = len([c for c in guild.channels if isinstance(c, discord.CategoryChannel)])
-                        
-                        bot_member = guild.get_member(bot.user.id)
-                        bot_role = bot_member.top_role if bot_member else None
-                        bot_role_name = bot_role.name if bot_role else "No role"
-                        
-                        total_roles = len(guild.roles)
-                        total_emojis = len(guild.emojis)
-                        total_stickers = len(guild.stickers) if hasattr(guild, 'stickers') else 0
-                        
-                        system_prompt = (
-                            f"You are a hilarious, witty, and super knowledgeable Discord bot named {bot.user.display_name}.\n\n"
-                            f"=== SERVER INFORMATION ===\n"
-                            f"Server Name: {guild_name}\n"
-                            f"Server ID: {guild_id}\n"
-                            f"Server Created: {guild_created}\n"
-                            f"Total Members: {member_count}\n"
-                            f"Text Channels: {text_channels}\n"
-                            f"Voice Channels: {voice_channels}\n"
-                            f"Categories: {categories}\n"
-                            f"Total Roles: {total_roles}\n"
-                            f"Total Emojis: {total_emojis}\n"
-                            f"Total Stickers: {total_stickers}\n"
-                            f"Current Channel: #{channel_name} (ID: {channel_id})\n"
-                            f"Bot's Highest Role: {bot_role_name}\n\n"
-                            f"=== YOUR PERSONALITY ===\n"
-                            f"You have an amazing sense of humor and love making people laugh.\n"
-                            f"You know EVERYTHING about:\n"
-                            f"- Lua programming (you're a Lua expert!)\n"
-                            f"- Roblox game development and scripting\n"
-                            f"- Discord bots and API\n"
-                            f"- Python, JavaScript, and all programming languages\n"
-                            f"- Gaming, memes, and internet culture\n"
-                            f"- Pretty much everything on Earth!\n\n"
-                            f"Your personality:\n"
-                            f"- You're funny, sarcastic (in a friendly way), and entertaining\n"
-                            f"- You love making jokes and puns\n"
-                            f"- You're super helpful and give detailed explanations\n"
-                            f"- You speak in a casual, friendly tone with emojis\n"
-                            f"- You sometimes use funny analogies to explain things\n"
-                            f"- You keep responses under 1800 characters\n"
-                            f"- You reference the server you're in and the user you're talking to\n"
-                            f"- You can answer questions about the server itself\n"
-                            f"- You know the server's name, member count, and channel info\n\n"
-                            f"User you're talking to: {message.author.display_name}\n"
-                            f"Their ID: {message.author.id}\n\n"
-                            f"Be helpful but make it FUN! Don't be boring. Add some personality!\n"
-                            f"Feel free to reference the server details in your responses.\n"
-                            f"If someone asks about the server, you can tell them about it!"
-                        )
-                        
-                        messages = [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": message.content}
-                        ]
-                        
-                        response = groq_client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=messages,
-                            temperature=0.8,
-                            max_tokens=800,
-                            top_p=1
-                        )
-                        
-                        if response and response.choices:
-                            reply = response.choices[0].message.content
-                            if reply:
-                                await message.reply(reply[:1990])
-                            else:
-                                await message.reply("🤔 Hmm, my brain is buffering... Try again?")
-                        else:
-                            await message.reply("😅 Oops! My AI brain glitched. Try again in a moment!")
-                            
-                    except Exception as e:
-                        print(f"Groq Error: {e}")
-                        await message.reply("⚠️ My AI brain ran into an error. Let me try again!")
-                
-                else:
-                    error_msg = "⚠️ **AI is not properly configured!**\n"
-                    if not HAS_GROQ:
-                        error_msg += "The Groq package is not installed.\n"
-                        error_msg += "**Fix:** Run `pip install groq` and restart the bot."
-                    elif not groq_client:
-                        error_msg += "The Groq client failed to initialize.\n"
-                        error_msg += "**Fix:** Check your Groq API key."
-                    else:
-                        error_msg += "Unknown error with Groq configuration."
-                    
-                    await message.reply(error_msg)
-            return
 
     if message.channel.id in AUTO_PURGE_SETTINGS:
         settings = AUTO_PURGE_SETTINGS[message.channel.id]
@@ -865,11 +678,9 @@ async def show_commands(ctx):
     embed.add_field(name="Auto-Features", value="""
 **Mention Protection** - Auto-warns & times out NON-ADMIN users who mention the highest role 3 times
 **Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
-**AI Talking Bot** - Chats contextually in designated channels with humor and knowledge
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
-`/talking bot status:[On/Off] [channel:]` - Set up a channel where the bot will chat using AI
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
 `/warning mention status:[On/Off] [ignored-channel:] [ignore-role:] [protected-role:]` - Toggle mention warnings, exclude channels/roles, and protect roles
@@ -1215,8 +1026,6 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    print(f"Groq Package: {'✅ Installed' if HAS_GROQ else '❌ Not installed'}")
-    print(f"Groq Client: {'✅ Connected' if groq_client else '❌ Not connected'}")
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
