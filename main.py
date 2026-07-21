@@ -37,6 +37,7 @@ talking_group = app_commands.Group(name="talking", description="Commands for the
 auto_group = app_commands.Group(name="auto", description="Automation commands")
 auto_purge_group = app_commands.Group(name="purge", description="Auto purge commands", parent=auto_group)
 add_group = app_commands.Group(name="add", description="Add server features")
+instant_group = app_commands.Group(name="instant", description="Instant permission commands")
 
 tree.add_command(create_group)
 tree.add_command(warning_group)
@@ -44,6 +45,7 @@ tree.add_command(deobf_group)
 tree.add_command(talking_group)
 tree.add_command(auto_group)
 tree.add_command(add_group)
+tree.add_command(instant_group)
 
 TICKET_SETTINGS = {}
 WARNINGS = {}
@@ -274,6 +276,65 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("❌ Error: I don't have permission to manage roles. Please ask an admin to move my bot role higher.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
+@instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
+async def instant_permissions(interaction: discord.Interaction):
+    """Disable Send Messages, Send Messages in Threads, Create Public Threads, and Create Private Threads for @everyone in all channels"""
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Error: Administrator permission is required to use this command.", ephemeral=True)
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    # Get the @everyone role
+    everyone_role = interaction.guild.default_role
+    
+    updated_channels = 0
+    failed_channels = []
+    
+    # Loop through all channels in the guild
+    for channel in interaction.guild.channels:
+        try:
+            # Only apply to text channels (including forums and threads)
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.Thread)):
+                await channel.set_permissions(
+                    everyone_role,
+                    send_messages=False,
+                    send_messages_in_threads=False,
+                    create_public_threads=False,
+                    create_private_threads=False
+                )
+                updated_channels += 1
+                await asyncio.sleep(0.1)  # Prevent rate limiting
+        except Exception as e:
+            failed_channels.append(f"{channel.name} ({str(e)})")
+    
+    # Create response embed
+    embed = discord.Embed(
+        title="⚡ Instant Permissions Applied",
+        description=f"Successfully disabled messaging permissions for **@everyone** in **{updated_channels}** channels.",
+        color=discord.Colour.red()
+    )
+    embed.add_field(
+        name="Permissions Disabled",
+        value="❌ Send Messages\n❌ Send Messages in Threads\n❌ Create Public Threads\n❌ Create Private Threads",
+        inline=False
+    )
+    embed.add_field(
+        name="Affected Channels",
+        value=f"✅ {updated_channels} channels updated",
+        inline=False
+    )
+    embed.set_footer(text=f"Action by {interaction.user.display_name}")
+    embed.timestamp = discord.utils.utcnow()
+    
+    if failed_channels:
+        embed.add_field(
+            name="⚠️ Failed Channels",
+            value=f"Failed to update {len(failed_channels)} channels. They may be categories or the bot may lack permissions.",
+            inline=False
+        )
+    
+    await interaction.followup.send(embed=embed)
 
 @add_group.command(name="verify", description="Set up a verification system and auto-role unverified members")
 @app_commands.describe(
@@ -605,6 +666,7 @@ async def show_commands(ctx):
 **AI Talking Bot** - Chats contextually in designated channels
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
+`/instant permissions` - Instantly disable @everyone messaging in ALL channels
 `/talking bot status:[On/Off] [channel:]` - Set up a channel where the bot will chat using AI
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
