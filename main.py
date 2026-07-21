@@ -196,14 +196,20 @@ async def schedule_auto_purge(channel_id):
     if not channel:
         return
     try:
-        await channel.purge(limit=None)
+        deleted = await channel.purge(limit=None)
+        purged_count = len(deleted)
     except Exception:
-        pass
+        purged_count = 0
     # Require fresh activity (2 messages) again before this can trigger next time
     settings["message_count"] = 0
     settings["task"] = None
-    embed = discord.Embed(title="🧹 Auto Purge Completed", color=discord.Colour.green())
-    embed.description = f"All messages in {channel.mention} were automatically purged after **{settings['label']}** of inactivity."
+    embed = discord.Embed(
+        title="🧹 Auto Purge Completed",
+        description=f"All messages is clean 🧹\n**{purged_count}** message(s) purged from {channel.mention} after **{settings['label']}** of inactivity.",
+        color=discord.Colour.green()
+    )
+    embed.set_footer(text="Auto Purge")
+    embed.timestamp = discord.utils.utcnow()
     try:
         await channel.send(embed=embed)
     except Exception:
