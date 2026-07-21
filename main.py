@@ -40,6 +40,7 @@ AUTO_PURGE_SETTINGS = {}  # channel_id -> {"duration": seconds, "task": asyncio.
 TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
 MENTION_WARNINGS_ENABLED = True  # Default state for highest role mention warnings
 IGNORED_WARNING_CHANNELS = set()  # Store channel IDs where mention warnings are disabled
+IGNORED_WARNING_ROLES = set()  # Store role IDs that bypass mention warnings
 
 def parse_time(time_str):
     if not time_str:
@@ -228,40 +229,49 @@ async def say_message(interaction: discord.Interaction, message: str):
 @warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(
     status="Select whether to turn mention warnings On or Off",
-    ignored_channel="Optional: Select a channel where mention warnings will be ignored"
+    ignored_channel="Optional: Select a channel where mention warnings will be ignored",
+    ignored_role="Optional: Select a role that will bypass mention warnings"
 )
-@app_commands.rename(ignored_channel="ignored-channel")
+@app_commands.rename(ignored_channel="ignored-channel", ignored_role="ignore-role")
 @app_commands.choices(status=[
     app_commands.Choice(name="On", value="on"),
     app_commands.Choice(name="Off", value="off")
 ])
-async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str], ignored_channel: discord.TextChannel = None):
+async def warning_mention_toggle(interaction: discord.Interaction, status: app_commands.Choice[str], ignored_channel: discord.TextChannel = None, ignored_role: discord.Role = None):
     global MENTION_WARNINGS_ENABLED
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to change this setting.", ephemeral=True)
     
+    channel_msg = ""
+    if ignored_channel:
+        if ignored_channel.id in IGNORED_WARNING_CHANNELS:
+            IGNORED_WARNING_CHANNELS.remove(ignored_channel.id)
+            channel_msg = f"\n\n✅ **Removed Channel:** Mentions in {ignored_channel.mention} will now trigger warnings."
+        else:
+            IGNORED_WARNING_CHANNELS.add(ignored_channel.id)
+            channel_msg = f"\n\n🚫 **Ignored Channel:** Mentions in {ignored_channel.mention} will be ignored."
+
+    role_msg = ""
+    if ignored_role:
+        if ignored_role.id in IGNORED_WARNING_ROLES:
+            IGNORED_WARNING_ROLES.remove(ignored_role.id)
+            role_msg = f"\n\n✅ **Removed Role:** Members with the {ignored_role.mention} role will now receive warnings."
+        else:
+            IGNORED_WARNING_ROLES.add(ignored_role.id)
+            role_msg = f"\n\n🚫 **Ignored Role:** Members with the {ignored_role.mention} role will bypass warnings."
+
     if status.value == "on":
         MENTION_WARNINGS_ENABLED = True
-        if ignored_channel:
-            IGNORED_WARNING_CHANNELS.add(ignored_channel.id)
-            embed = discord.Embed(
-                title="⚙️ Mention Protection Enabled",
-                description=f"Warnings for mentioning the highest role are now **ON**.\n\n🚫 **Ignored Channel:** Mentions in {ignored_channel.mention} will be **ignored**.",
-                color=discord.Colour.green()
-            )
-        else:
-            embed = discord.Embed(
-                title="⚙️ Mention Protection Enabled",
-                description="Warnings for mentioning the highest role are now **ON** for all channels.",
-                color=discord.Colour.green()
-            )
+        embed = discord.Embed(
+            title="⚙️ Mention Protection Enabled",
+            description=f"Warnings for mentioning the highest role are now **ON**.{channel_msg}{role_msg}",
+            color=discord.Colour.green()
+        )
     else:
         MENTION_WARNINGS_ENABLED = False
-        if ignored_channel and ignored_channel.id in IGNORED_WARNING_CHANNELS:
-            IGNORED_WARNING_CHANNELS.remove(ignored_channel.id)
         embed = discord.Embed(
             title="⚙️ Mention Protection Disabled",
-            description="Warnings for mentioning the highest role are now **OFF** globally.",
+            description=f"Warnings for mentioning the highest role are now **OFF** globally.{channel_msg}{role_msg}",
             color=discord.Colour.red()
         )
         
@@ -310,49 +320,57 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
+    # --- MENTION WARNING LOGIC ---
     # Check if mention warnings are enabled globally and channel is not ignored
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        # Get highest role in server
-        highest_role = max(message.guild.roles, key=lambda r: r.position)
         
-        # Check if highest role is mentioned OR any user with highest role is mentioned
-        mentioned_highest = False
-        if highest_role in message.role_mentions:
-            mentioned_highest = True
-        else:
-            for user in message.mentions:
-                if highest_role in user.roles:
-                    mentioned_highest = True
-                    break
+        # Check if the user is an admin OR has an ignored role
+        is_admin = message.author.guild_permissions.administrator
+        has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
-        if mentioned_highest:
-            guild_id = message.guild.id
-            user_id = message.author.id
-            WARNINGS.setdefault(guild_id, {})
-            WARNINGS[guild_id].setdefault(user_id, 0)
-            WARNINGS[guild_id][user_id] += 1
-            count = WARNINGS[guild_id][user_id]
+        # Only process warnings if they are NOT an admin and DO NOT have an ignored role
+        if not is_admin and not has_ignored_role:
+            # Get highest role in server
+            highest_role = max(message.guild.roles, key=lambda r: r.position)
             
-            if count == 1:
-                embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
-                embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
-                await message.channel.send(embed=embed)
-            elif count == 2:
-                embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
-                embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning the highest role.\nYou will be timed out after the next warning!"
-                await message.channel.send(embed=embed)
-            elif count >= 3:
-                try:
-                    await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3 times")
-                    embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
-                    embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+            # Check if highest role is mentioned OR any user with highest role is mentioned
+            mentioned_highest = False
+            if highest_role in message.role_mentions:
+                mentioned_highest = True
+            else:
+                for user in message.mentions:
+                    if highest_role in user.roles:
+                        mentioned_highest = True
+                        break
+            
+            if mentioned_highest:
+                guild_id = message.guild.id
+                user_id = message.author.id
+                WARNINGS.setdefault(guild_id, {})
+                WARNINGS[guild_id].setdefault(user_id, 0)
+                WARNINGS[guild_id][user_id] += 1
+                count = WARNINGS[guild_id][user_id]
+                
+                if count == 1:
+                    embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
+                    embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
                     await message.channel.send(embed=embed)
-                    WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
-                except Exception as e:
-                    embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
-                    embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+                elif count == 2:
+                    embed = discord.Embed(title="⚠️ Warning 2/3", color=discord.Colour.orange())
+                    embed.description = f"{message.author.mention}, you have received **Warning 2/3** for mentioning the highest role.\nYou will be timed out after the next warning!"
                     await message.channel.send(embed=embed)
-                    WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
+                elif count >= 3:
+                    try:
+                        await message.author.timeout(discord.utils.utcnow() + timedelta(seconds=TIMEOUT_DURATION), reason="Mentioned highest role 3 times")
+                        embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
+                        embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+                        await message.channel.send(embed=embed)
+                        WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
+                    except Exception as e:
+                        embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
+                        embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
+                        await message.channel.send(embed=embed)
+                        WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
         
     await bot.process_commands(message)
 
@@ -369,7 +387,7 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/say message:` - Send a custom message as the bot with mentions
-`/warning mention status:[On/Off] [ignored_channel:]` - Toggle mention warnings and exclude specific channels
+`/warning mention status:[On/Off] [ignored-channel:] [ignore-role:]` - Toggle mention warnings and exclude specific channels or roles
 `/deobf file file:` - Deobfuscate uploaded .lua file
 `/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket` - Create a ticket panel
