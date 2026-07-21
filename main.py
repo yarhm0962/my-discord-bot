@@ -10,7 +10,7 @@ from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
 
-# Only import Groq
+# Try to import Groq
 try:
     from groq import Groq
     HAS_GROQ = True
@@ -19,10 +19,18 @@ except ImportError:
     Groq = None
 
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is running"
-def run(): app.run(host='0.0.0.0', port=8080)
-def keep_alive(): Thread(target=run).start()
+def home():
+    return "Bot is running"
+
+def run():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, threaded=False, use_reloader=False)
+
+def keep_alive():
+    t = Thread(target=run, daemon=True)
+    t.start()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -303,7 +311,6 @@ async def instant_permissions(interaction: discord.Interaction):
                     create_private_threads=False
                 )
                 updated_channels += 1
-                # Increased delay to avoid rate limits
                 await asyncio.sleep(0.5)
         except Exception as e:
             failed_channels.append(f"{channel.name} ({str(e)})")
@@ -372,9 +379,8 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     except Exception:
         pass
 
-    # 3. Update Channel Permissions - FIXED with proper rate limiting
-    # Use asyncio.gather with semaphore to control concurrent requests
-    semaphore = asyncio.Semaphore(5)  # Allow 5 concurrent channel updates max
+    # Update Channel Permissions with rate limiting
+    semaphore = asyncio.Semaphore(5)
     
     async def update_channel_permissions(ch):
         async with semaphore:
@@ -399,27 +405,23 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
                         )
                 else:
                     await ch.set_permissions(not_verified_role, view_channel=False)
-                # Small delay between each channel
                 await asyncio.sleep(0.3)
             except Exception:
                 pass
     
-    # Create tasks for all channels
     tasks = [update_channel_permissions(ch) for ch in interaction.guild.channels]
     await asyncio.gather(*tasks)
 
-    # 4. Add "Not Verified" to everyone who is missing the verified role - FIXED
+    # Add "Not Verified" to everyone who is missing the verified role
     assigned_count = 0
     failed_members = []
     
-    # Gather all members who need the role
     members_to_update = []
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
             members_to_update.append(member)
     
-    # Process members in smaller batches with more delays
-    batch_size = 5  # Reduced batch size from 10 to 5
+    batch_size = 5
     for i in range(0, len(members_to_update), batch_size):
         batch = members_to_update[i:i + batch_size]
         tasks = []
@@ -427,21 +429,17 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
             task = member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role")
             tasks.append(task)
         
-        # Wait for all tasks in this batch to complete
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Count successes and failures
         for result in results:
             if isinstance(result, Exception):
                 failed_members.append(str(result))
             else:
                 assigned_count += 1
         
-        # Longer delay between batches to respect rate limits
         if i + batch_size < len(members_to_update):
-            await asyncio.sleep(1.0)  # Increased from 0.5 to 1.0
+            await asyncio.sleep(1.0)
 
-    # 5. Create and send the Verification Embed to the specified channel
     embed = discord.Embed(
         title="🔐 Server Verification",
         description=(
@@ -464,7 +462,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
 
     await enabled_channel.send(embed=embed, view=view)
     
-    # Send completion message with stats
     success_message = f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
     success_message += f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
     if failed_members:
@@ -502,7 +499,6 @@ async def setup_talking_bot(interaction: discord.Interaction, status: app_comman
             return await interaction.response.send_message("❌ Error: You must provide a channel when turning the bot On.", ephemeral=True)
         TALKING_CHANNELS[interaction.guild.id] = channel.id
         
-        # Check if Groq is properly configured
         status_msg = ""
         if not HAS_GROQ:
             status_msg = "\n\n⚠️ **Warning:** Groq package is not installed. Run `pip install groq` to fix this."
@@ -637,10 +633,8 @@ async def on_message(message):
     if message.guild.id in TALKING_CHANNELS and message.channel.id == TALKING_CHANNELS[message.guild.id]:
         if not message.content.startswith(bot.command_prefix):
             async with message.channel.typing():
-                # Check if Groq is available
                 if HAS_GROQ and groq_client:
                     try:
-                        # Get server info
                         guild = message.guild
                         member_count = guild.member_count
                         guild_name = guild.name
@@ -649,22 +643,18 @@ async def on_message(message):
                         channel_name = message.channel.name
                         channel_id = message.channel.id
                         
-                        # Count channels
                         text_channels = len([c for c in guild.channels if isinstance(c, discord.TextChannel)])
                         voice_channels = len([c for c in guild.channels if isinstance(c, discord.VoiceChannel)])
                         categories = len([c for c in guild.channels if isinstance(c, discord.CategoryChannel)])
                         
-                        # Get bot's role info
                         bot_member = guild.get_member(bot.user.id)
                         bot_role = bot_member.top_role if bot_member else None
                         bot_role_name = bot_role.name if bot_role else "No role"
                         
-                        # Get some random server stats
                         total_roles = len(guild.roles)
                         total_emojis = len(guild.emojis)
                         total_stickers = len(guild.stickers) if hasattr(guild, 'stickers') else 0
                         
-                        # Create a detailed server info prompt
                         system_prompt = (
                             f"You are a hilarious, witty, and super knowledgeable Discord bot named {bot.user.display_name}.\n\n"
                             f"=== SERVER INFORMATION ===\n"
@@ -706,13 +696,11 @@ async def on_message(message):
                             f"If someone asks about the server, you can tell them about it!"
                         )
                         
-                        # Prepare the messages for Groq
                         messages = [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": message.content}
                         ]
                         
-                        # Get response from Groq
                         response = groq_client.chat.completions.create(
                             model="llama-3.3-70b-versatile",
                             messages=messages,
@@ -735,7 +723,6 @@ async def on_message(message):
                         await message.reply("⚠️ My AI brain ran into an error. Let me try again!")
                 
                 else:
-                    # Groq is not available
                     error_msg = "⚠️ **AI is not properly configured!**\n"
                     if not HAS_GROQ:
                         error_msg += "The Groq package is not installed.\n"
@@ -1083,12 +1070,10 @@ async def create_embed(interaction: discord.Interaction, description: str, title
     
     await interaction.response.send_message("Embed sent successfully!", ephemeral=True)
     
-    # Send the plain message first if provided (with mentions enabled)
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     if plain_message:
         await interaction.channel.send(content=plain_message, allowed_mentions=allowed_mentions)
     
-    # Send the embed
     await interaction.channel.send(embed=embed)
 
 @tree.command(name="ban", description="Ban a user from the server")
@@ -1223,6 +1208,11 @@ async def on_ready():
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
-keep_alive()
-TOKEN = os.getenv('TOKEN')
-bot.run(TOKEN)
+if __name__ == "__main__":
+    keep_alive()
+    TOKEN = os.getenv('TOKEN')
+    if TOKEN:
+        print("Starting Discord bot...")
+        bot.run(TOKEN)
+    else:
+        print("ERROR: TOKEN environment variable not set!")
