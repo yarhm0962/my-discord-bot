@@ -626,10 +626,12 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
-    # Check for protected role mentions
+    # Check for protected role mentions (works for EVERYONE, including admins)
     if PROTECTED_ROLES and message.channel.id not in IGNORED_WARNING_CHANNELS:
+        # Check if the message author has an ignored role
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
+        # Protected roles warn EVERYONE except those with ignored roles
         if not has_ignored_role:
             mentioned_protected = False
             for role_mention in message.role_mentions:
@@ -675,11 +677,14 @@ async def on_message(message):
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
 
-    # Check for highest role mentions
+    # Check for highest role mentions (admins are EXEMPT from this)
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
+        # Check if the message author has an ignored role OR is an admin
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
+        is_admin = message.author.guild_permissions.administrator
         
-        if not has_ignored_role:
+        # Skip if user has ignored role OR is an admin
+        if not has_ignored_role and not is_admin:
             highest_role = max(message.guild.roles, key=lambda r: r.position)
             
             mentioned_highest = False
@@ -731,8 +736,8 @@ async def show_commands(ctx):
 `.cmds` - Show this command list
 """, inline=False)
     embed.add_field(name="Auto-Features", value="""
-**Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
-**Protected Roles** - Set specific roles that trigger warnings when mentioned (via /warning mention)
+**Mention Protection** - Auto-warns & times out NON-ADMIN users who mention the highest role 3 times
+**Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
 **AI Talking Bot** - Chats contextually in designated channels
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
