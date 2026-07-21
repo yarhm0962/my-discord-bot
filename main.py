@@ -461,9 +461,12 @@ class CloseTicketView(discord.ui.View):
     admin_role="Required: Role that manages and responds to tickets",
     category="Required: Category where tickets will be created",
     description="Optional: Custom panel description",
+    title="Optional: Panel embed title",
+    footer="Optional: Panel embed footer text",
+    image="Optional: A large image to display on the panel embed",
     color="Optional: Panel embed color (name or hex, default: green)"
 )
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", color: str = "green"):
+async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required", ephemeral=True)
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
@@ -515,6 +518,12 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
             await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
     embed = discord.Embed(description=panel_description, color=embed_color)
+    if title:
+        embed.title = title
+    if footer:
+        embed.set_footer(text=footer)
+    if image:
+        embed.set_image(url=image.url)
     await interaction.response.send_message("Ticket panel created!", ephemeral=True)
     await interaction.channel.send(embed=embed, view=TicketPanel())
 
@@ -523,9 +532,10 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     description="Required: The embed description text",
     title="Optional: The embed title",
     footer="Optional: The embed footer text",
+    image="Optional: A large image to display on the embed",
     color="Optional: Embed color (name or hex, default: green)"
 )
-async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", color: str = "green"):
+async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green"):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
     embed_color = get_color(color)
@@ -534,6 +544,8 @@ async def create_embed(interaction: discord.Interaction, description: str, title
         embed.title = title
     if footer:
         embed.set_footer(text=footer)
+    if image:
+        embed.set_image(url=image.url)
     await interaction.response.send_message("Embed sent successfully!", ephemeral=True)
     await interaction.channel.send(embed=embed)
 
