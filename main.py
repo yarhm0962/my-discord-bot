@@ -248,9 +248,13 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-@add_group.command(name="verify", description="Set up a verification system and give all unverified members a Not Verified role")
-@app_commands.describe(role="Required: The role to give users when they verify")
-async def add_verify(interaction: discord.Interaction, role: discord.Role):
+@add_group.command(name="verify", description="Set up a verification system and auto-role unverified members")
+@app_commands.describe(
+    role="Required: The role to give users when they verify",
+    enabled_channel="Required: The channel where the verification embed will be sent"
+)
+@app_commands.rename(enabled_channel="enabled-channel")
+async def add_verify(interaction: discord.Interaction, role: discord.Role, enabled_channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
 
@@ -270,20 +274,50 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role):
         except Exception as e:
             return await interaction.followup.send(f"❌ Error creating 'Not Verified' role: {str(e)}")
 
-    # 2. Add "Not Verified" to everyone who is missing the verified role
+    # 2. Make the verification channel strictly Read-Only for @everyone
+    try:
+        await enabled_channel.set_permissions(
+            interaction.guild.default_role,
+            send_messages=False,
+            send_messages_in_threads=False,
+            create_public_threads=False,
+            create_private_threads=False
+        )
+    except Exception:
+        pass
+
+    # 3. Update Channel Permissions 
+    # Hides all channels from "Not Verified", except the enabled_channel (and forces read-only on it)
+    for ch in interaction.guild.channels:
+        try:
+            if ch.id == enabled_channel.id:
+                await ch.set_permissions(
+                    not_verified_role, 
+                    view_channel=True, 
+                    read_message_history=True, 
+                    send_messages=False,
+                    send_messages_in_threads=False,
+                    create_public_threads=False,
+                    create_private_threads=False
+                )
+            else:
+                await ch.set_permissions(not_verified_role, view_channel=False)
+            await asyncio.sleep(0.05) # Prevent Discord API rate limits
+        except Exception:
+            pass # Ignore channels the bot cannot edit
+
+    # 4. Add "Not Verified" to everyone who is missing the verified role
     assigned_count = 0
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
             try:
                 await member.add_roles(not_verified_role)
                 assigned_count += 1
-                await asyncio.sleep(0.1) # Pause slightly to prevent Discord rate limits
-            except discord.Forbidden:
-                return await interaction.followup.send("❌ Error: I lack permission to give roles to some users. Please move my bot role higher up the list!")
+                await asyncio.sleep(0.1)
             except Exception:
                 pass 
 
-    # 3. Create and send the Verification Embed
+    # 5. Create and send the Verification Embed to the specified channel
     embed = discord.Embed(
         title="🔐 Server Verification",
         description=(
@@ -304,8 +338,11 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role):
     )
     view.add_item(btn)
 
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.followup.send(f"✅ Verification panel setup complete! Gave the 'Not Verified' role to **{assigned_count}** members.")
+    await enabled_channel.send(embed=embed, view=view)
+    await interaction.followup.send(
+        f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
+        f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
+        f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*")
 
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
@@ -317,18 +354,37 @@ async def say_message(interaction: discord.Interaction, message: str):
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
 
-@talking_group.command(name="bot", description="Set a specific channel for the AI talking bot to chat with users")
-@app_commands.describe(channel="Required: The channel where the bot will reply to user messages")
-async def setup_talking_bot(interaction: discord.Interaction, channel: discord.TextChannel):
+@talking_group.command(name="bot", description="Toggle the AI talking bot in a specific channel")
+@app_commands.describe(
+    status="Select whether to turn the bot On or Off",
+    channel="Required if On: The channel where the bot will reply to user messages"
+)
+@app_commands.choices(status=[
+    app_commands.Choice(name="On", value="on"),
+    app_commands.Choice(name="Off", value="off")
+])
+async def setup_talking_bot(interaction: discord.Interaction, status: app_commands.Choice[str], channel: discord.TextChannel = None):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
     
-    TALKING_CHANNELS[interaction.guild.id] = channel.id
-    embed = discord.Embed(
-        title="🤖 Talking Bot Configured", 
-        description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.", 
-        color=discord.Colour.blue()
-    )
+    if status.value == "on":
+        if not channel:
+            return await interaction.response.send_message("❌ Error: You must provide a channel when turning the bot On.", ephemeral=True)
+        TALKING_CHANNELS[interaction.guild.id] = channel.id
+        embed = discord.Embed(
+            title="🤖 Talking Bot Enabled", 
+            description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.", 
+            color=discord.Colour.blue()
+        )
+    else:
+        if interaction.guild.id in TALKING_CHANNELS:
+            del TALKING_CHANNELS[interaction.guild.id]
+        embed = discord.Embed(
+            title="🤖 Talking Bot Disabled", 
+            description="The AI chatbot has been turned off for this server.", 
+            color=discord.Colour.red()
+        )
+        
     await interaction.response.send_message(embed=embed)
 
 @warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
@@ -380,6 +436,34 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
             color=discord.Colour.red()
         )
         
+    await interaction.response.send_message(embed=embed)
+
+@auto_purge_group.command(name="messages", description="Auto purge a channel after a period of inactivity")
+@app_commands.describe(
+    channel="Required: The channel where auto purge will apply",
+    time="Required: Inactivity duration before purge, e.g. 1s, 1m, 1h, 1d"
+)
+async def auto_purge_messages(interaction: discord.Interaction, channel: discord.TextChannel, time: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
+
+    duration = parse_time(time)
+    if not duration:
+        return await interaction.response.send_message("Error: Invalid time format. Use formats like 1s, 1m, 1h, 1d", ephemeral=True)
+
+    AUTO_PURGE_SETTINGS[channel.id] = {
+        "duration": duration,
+        "task": None,
+        "label": time,
+        "message_count": 0,
+        "guild_id": interaction.guild.id
+    }
+
+    embed = discord.Embed(title="🧹 Auto Purge Enabled", color=discord.Colour.green())
+    embed.add_field(name="Channel", value=channel.mention, inline=False)
+    embed.add_field(name="Inactivity Duration", value=f"**{time}**", inline=False)
+    embed.add_field(name="Behavior", value="Every new message in this channel resets the timer. Once the channel goes quiet for the set duration, all messages in it are purged.", inline=False)
+    embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
     await interaction.response.send_message(embed=embed)
 
 @bot.event
@@ -489,8 +573,8 @@ async def show_commands(ctx):
 **AI Talking Bot** - Chats contextually in designated channels
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
-`/talking bot channel:#channel` - Set up a channel where the bot will chat using AI
-`/add verify role:@role` - Set up verification system and auto-role members
+`/talking bot status:[On/Off] [channel:]` - Set up a channel where the bot will chat using AI
+`/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
 `/warning mention status:[On/Off] [ignored-channel:] [ignore-role:]` - Toggle mention warnings and exclude specific channels or roles
 `/deobf file file:` - Deobfuscate uploaded .lua file
