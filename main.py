@@ -22,6 +22,7 @@ try:
     HAS_GROQ = True
 except ImportError:
     HAS_GROQ = False
+    Groq = None
 
 app = Flask('')
 @app.route('/')
@@ -65,12 +66,21 @@ PROTECTED_ROLES = set()
 TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
 
-# Initialize Groq client
+# Initialize Groq client with proper error handling
 GROQ_API_KEY = "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"
+groq_client = None
 if HAS_GROQ and GROQ_API_KEY:
-    groq_client = Groq(api_key=GROQ_API_KEY)
+    try:
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        print("✅ Groq client initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize Groq client: {e}")
+        groq_client = None
 else:
-    groq_client = None
+    if not HAS_GROQ:
+        print("❌ Groq package not installed. Run: pip install groq")
+    if not GROQ_API_KEY:
+        print("❌ Groq API key not found")
 
 def parse_time(time_str):
     if not time_str:
@@ -479,6 +489,17 @@ async def setup_talking_bot(interaction: discord.Interaction, status: app_comman
             description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.", 
             color=discord.Colour.blue()
         )
+        
+        # Check if Groq is properly configured and show status
+        status_msg = ""
+        if not HAS_GROQ:
+            status_msg = "\n\n⚠️ **Warning:** Groq package is not installed. Run `pip install groq` to fix this."
+        elif not groq_client:
+            status_msg = "\n\n⚠️ **Warning:** Groq client failed to initialize. Check your API key."
+        else:
+            status_msg = "\n\n✅ **Groq API is ready!** The bot will respond with humor and knowledge!"
+        
+        embed.add_field(name="Status", value=status_msg, inline=False)
     else:
         if interaction.guild.id in TALKING_CHANNELS:
             del TALKING_CHANNELS[interaction.guild.id]
@@ -733,8 +754,8 @@ async def on_message(message):
                             await message.reply(
                                 "⚠️ **AI is not properly configured!**\n"
                                 "To use the talking bot, the owner must:\n"
-                                "1. Install the package (`pip install groq`)\n"
-                                "2. The Groq API key is already set up."
+                                "1. Install the Groq package: `pip install groq`\n"
+                                "2. Set up a Groq API key (the current one may be invalid)"
                             )
                     except Exception as e:
                         await message.reply("⚠️ My AI brain ran into an error processing that request.")
@@ -742,8 +763,8 @@ async def on_message(message):
                     await message.reply(
                         "⚠️ **AI is not properly configured!**\n"
                         "To use the talking bot, the owner must:\n"
-                        "1. Install the package (`pip install groq`)\n"
-                        "2. The Groq API key is already set up."
+                        "1. Install the Groq package: `pip install groq`\n"
+                        "2. Set up a Groq API key"
                     )
             return
 
@@ -1216,7 +1237,8 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    print(f"Groq API: {'✅ Connected' if HAS_GROQ and groq_client else '❌ Not connected'}")
+    print(f"Groq Package: {'✅ Installed' if HAS_GROQ else '❌ Not installed'}")
+    print(f"Groq Client: {'✅ Connected' if groq_client else '❌ Not connected'}")
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
