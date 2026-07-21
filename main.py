@@ -164,6 +164,19 @@ async def deobfuscate_from_url(url):
     except Exception as e:
         return None, f"Fetch Error: {str(e)[:80]}"
 
+@tree.command(name="say", description="Make the bot say a custom message with working mentions")
+@app_commands.describe(message="Required: The message you want the bot to say")
+async def say_message(interaction: discord.Interaction, message: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Error: Administrator permission is required to use this command.", ephemeral=True)
+    
+    # Confirm command execution ephemerally so command stays hidden
+    await interaction.response.send_message("Message sent successfully!", ephemeral=True)
+    
+    # Send message with all user/role mentions enabled
+    allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
+    await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
+
 @tree.command(name="warning-mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(status="Select whether to turn mention warnings On or Off")
 @app_commands.choices(status=[
@@ -247,6 +260,7 @@ async def show_commands(ctx):
 **Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
+`/say message:` - Send a custom message as the bot with mentions
 `/warning-mention status:[On/Off]` - Toggle mention warnings On or Off
 `/deobf-file file:` - Deobfuscate uploaded .lua file
 `/create-ticket` - Create a ticket panel
