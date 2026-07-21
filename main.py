@@ -382,16 +382,28 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     for ch in interaction.guild.channels:
         try:
             if ch.id == enabled_channel.id:
-                await ch.set_permissions(
-                    not_verified_role, 
-                    view_channel=True, 
-                    read_message_history=True, 
-                    send_messages=False,
-                    send_messages_in_threads=False,
-                    create_public_threads=False,
-                    create_private_threads=False
-                )
+                # For the verification channel, use the full set of permissions
+                # Check if it's a text channel before using thread permissions
+                if isinstance(ch, discord.TextChannel):
+                    await ch.set_permissions(
+                        not_verified_role, 
+                        view_channel=True, 
+                        read_message_history=True, 
+                        send_messages=False,
+                        send_messages_in_threads=False,
+                        create_public_threads=False,
+                        create_private_threads=False
+                    )
+                else:
+                    # For non-text channels, just set basic permissions
+                    await ch.set_permissions(
+                        not_verified_role,
+                        view_channel=True,
+                        read_message_history=True,
+                        send_messages=False
+                    )
             else:
+                # For other channels, just hide them
                 await ch.set_permissions(not_verified_role, view_channel=False)
             await asyncio.sleep(0.05) # Prevent Discord API rate limits
         except Exception:
