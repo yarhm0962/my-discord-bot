@@ -515,7 +515,8 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             await ticket_channel.send(embed=ticket_embed, view=CloseTicketView())
             await btn_interaction.response.send_message(f"Success: Ticket created → {ticket_channel.mention}", ephemeral=True)
     embed = discord.Embed(description=panel_description, color=embed_color)
-    await interaction.response.send_message(embed=embed, view=TicketPanel())
+    await interaction.response.send_message("Ticket panel created!", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=TicketPanel())
 
 @create_group.command(name="embed", description="Create a custom embed")
 @app_commands.describe(
