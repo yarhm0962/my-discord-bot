@@ -230,6 +230,7 @@ async def say_message(interaction: discord.Interaction, message: str):
     status="Select whether to turn mention warnings On or Off",
     ignored_channel="Optional: Select a channel where mention warnings will be ignored"
 )
+@app_commands.rename(ignored_channel="ignored-channel")
 @app_commands.choices(status=[
     app_commands.Choice(name="On", value="on"),
     app_commands.Choice(name="Off", value="off")
@@ -434,23 +435,6 @@ async def close_ticket_callback(interaction: discord.Interaction):
     await asyncio.sleep(3)
     await interaction.channel.delete()
 
-async def claim_ticket_callback(interaction: discord.Interaction):
-    settings = TICKET_SETTINGS.get(interaction.channel.id)
-    if not settings:
-        return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
-    staff_role = interaction.guild.get_role(settings["admin_role_id"])
-    is_staff = staff_role in interaction.user.roles if staff_role else False
-    if not (is_staff or interaction.user.guild_permissions.administrator):
-        return await interaction.response.send_message("Error: Only an admin/staff member can claim this ticket", ephemeral=True)
-    creator_id = settings.get("creator_id")
-    creator_mention = f"<@{creator_id}>" if creator_id else ""
-    claim_embed = discord.Embed(
-        title="🎫 Ticket Claimed",
-        description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
-        color=discord.Colour.yellow()
-    )
-    await interaction.response.send_message(content=creator_mention, embed=claim_embed)
-
 def build_ticket_actions_view(include_claim: bool = True):
     view = discord.ui.View(timeout=None)
     close_btn = discord.ui.Button(label="Close Ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
@@ -458,6 +442,31 @@ def build_ticket_actions_view(include_claim: bool = True):
     view.add_item(close_btn)
     if include_claim:
         claim_btn = discord.ui.Button(label="Claim Ticket", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="claim_ticket_btn")
+
+        async def claim_ticket_callback(interaction: discord.Interaction):
+            settings = TICKET_SETTINGS.get(interaction.channel.id)
+            if not settings:
+                return await interaction.response.send_message("Error: Could not verify ticket permissions", ephemeral=True)
+            staff_role = interaction.guild.get_role(settings["admin_role_id"])
+            is_staff = staff_role in interaction.user.roles if staff_role else False
+            if not (is_staff or interaction.user.guild_permissions.administrator):
+                return await interaction.response.send_message("Error: Only an admin/staff member can claim this ticket", ephemeral=True)
+            if claim_btn.disabled:
+                return await interaction.response.send_message("Error: This ticket has already been claimed", ephemeral=True)
+
+            creator_id = settings.get("creator_id")
+            creator_mention = f"<@{creator_id}>" if creator_id else ""
+            claim_embed = discord.Embed(
+                title="🎫 Ticket Claimed",
+                description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
+                color=discord.Colour.yellow()
+            )
+            # Disable the button on the original message so it can only be clicked once
+            claim_btn.disabled = True
+            claim_btn.label = f"Claimed by {interaction.user.display_name}"
+            await interaction.response.edit_message(view=claim_btn.view)
+            await interaction.channel.send(content=creator_mention, embed=claim_embed)
+
         claim_btn.callback = claim_ticket_callback
         view.add_item(claim_btn)
     return view
@@ -474,6 +483,12 @@ def build_ticket_actions_view(include_claim: bool = True):
     enable_claim_button="Optional: Toggle the Claim Ticket button inside tickets (default: On)",
     button_label="Optional: Text for the ticket creation button (default: Create Ticket)",
     button_emoji="Optional: Emoji for the ticket creation button (default: 🎟️)"
+)
+@app_commands.rename(
+    admin_role="admin-role",
+    enable_claim_button="enable-claim-button",
+    button_label="button-label",
+    button_emoji="button-emoji"
 )
 async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", enable_claim_button: bool = True, button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
     if not interaction.user.guild_permissions.administrator:
@@ -582,6 +597,7 @@ async def ban_user(interaction: discord.Interaction, user: discord.Member, reaso
 
 @tree.command(name="unban", description="Unban a user from the server")
 @app_commands.describe(user_id="Required: ID of the user to unban")
+@app_commands.rename(user_id="user-id")
 async def unban_user(interaction: discord.Interaction, user_id: str):
     if not interaction.user.guild_permissions.ban_members:
         return await interaction.response.send_message("Error: Missing permission — Ban Members", ephemeral=True)
