@@ -10,13 +10,7 @@ from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
 
-try:
-    import google.generativeai as genai
-    HAS_GENAI = True
-except ImportError:
-    HAS_GENAI = False
-
-# Try to import Groq
+# Only import Groq
 try:
     from groq import Groq
     HAS_GROQ = True
@@ -66,7 +60,7 @@ PROTECTED_ROLES = set()
 TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
 
-# Initialize Groq client with proper error handling
+# Initialize Groq client
 GROQ_API_KEY = "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"
 groq_client = None
 if HAS_GROQ and GROQ_API_KEY:
@@ -484,13 +478,8 @@ async def setup_talking_bot(interaction: discord.Interaction, status: app_comman
         if not channel:
             return await interaction.response.send_message("❌ Error: You must provide a channel when turning the bot On.", ephemeral=True)
         TALKING_CHANNELS[interaction.guild.id] = channel.id
-        embed = discord.Embed(
-            title="🤖 Talking Bot Enabled", 
-            description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.", 
-            color=discord.Colour.blue()
-        )
         
-        # Check if Groq is properly configured and show status
+        # Check if Groq is properly configured
         status_msg = ""
         if not HAS_GROQ:
             status_msg = "\n\n⚠️ **Warning:** Groq package is not installed. Run `pip install groq` to fix this."
@@ -499,7 +488,11 @@ async def setup_talking_bot(interaction: discord.Interaction, status: app_comman
         else:
             status_msg = "\n\n✅ **Groq API is ready!** The bot will respond with humor and knowledge!"
         
-        embed.add_field(name="Status", value=status_msg, inline=False)
+        embed = discord.Embed(
+            title="🤖 Talking Bot Enabled", 
+            description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.{status_msg}", 
+            color=discord.Colour.blue()
+        )
     else:
         if interaction.guild.id in TALKING_CHANNELS:
             del TALKING_CHANNELS[interaction.guild.id]
@@ -621,7 +614,7 @@ async def on_message(message):
     if message.guild.id in TALKING_CHANNELS and message.channel.id == TALKING_CHANNELS[message.guild.id]:
         if not message.content.startswith(bot.command_prefix):
             async with message.channel.typing():
-                # Try Groq first
+                # Check if Groq is available
                 if HAS_GROQ and groq_client:
                     try:
                         # Get server info
@@ -718,54 +711,19 @@ async def on_message(message):
                         print(f"Groq Error: {e}")
                         await message.reply("⚠️ My AI brain ran into an error. Let me try again!")
                 
-                # Fallback to Gemini if Groq fails
-                elif HAS_GENAI:
-                    try:
-                        gemini_key = os.getenv('GEMINI_API_KEY')
-                        if gemini_key:
-                            genai.configure(api_key=gemini_key)
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            
-                            # Get server info for Gemini fallback
-                            guild = message.guild
-                            guild_name = guild.name
-                            member_count = guild.member_count
-                            channel_name = message.channel.name
-                            
-                            prompt = (
-                                f"You are a hilarious, witty, and super knowledgeable Discord bot named {bot.user.display_name}.\n\n"
-                                f"Server Name: {guild_name}\n"
-                                f"Total Members: {member_count}\n"
-                                f"Current Channel: #{channel_name}\n"
-                                f"User: {message.author.display_name}\n\n"
-                                f"You know EVERYTHING about Lua, Roblox, Discord bots, and more.\n"
-                                f"Be funny, sarcastic (in a friendly way), and entertaining.\n"
-                                f"Keep responses under 1800 characters.\n"
-                                f"Reference the server you're in and the user you're talking to.\n\n"
-                                f"User says: {message.content}"
-                            )
-                            
-                            response = await model.generate_content_async(prompt)
-                            if response.text:
-                                await message.reply(response.text[:1990])
-                            else:
-                                await message.reply("🤔 Hmm, my brain is buffering... Try again?")
-                        else:
-                            await message.reply(
-                                "⚠️ **AI is not properly configured!**\n"
-                                "To use the talking bot, the owner must:\n"
-                                "1. Install the Groq package: `pip install groq`\n"
-                                "2. Set up a Groq API key (the current one may be invalid)"
-                            )
-                    except Exception as e:
-                        await message.reply("⚠️ My AI brain ran into an error processing that request.")
                 else:
-                    await message.reply(
-                        "⚠️ **AI is not properly configured!**\n"
-                        "To use the talking bot, the owner must:\n"
-                        "1. Install the Groq package: `pip install groq`\n"
-                        "2. Set up a Groq API key"
-                    )
+                    # Groq is not available
+                    error_msg = "⚠️ **AI is not properly configured!**\n"
+                    if not HAS_GROQ:
+                        error_msg += "The Groq package is not installed.\n"
+                        error_msg += "**Fix:** Run `pip install groq` and restart the bot."
+                    elif not groq_client:
+                        error_msg += "The Groq client failed to initialize.\n"
+                        error_msg += "**Fix:** Check your Groq API key."
+                    else:
+                        error_msg += "Unknown error with Groq configuration."
+                    
+                    await message.reply(error_msg)
             return
 
     if message.channel.id in AUTO_PURGE_SETTINGS:
