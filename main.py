@@ -533,7 +533,8 @@ async def create_embed(interaction: discord.Interaction, description: str, title
         embed.title = title
     if footer:
         embed.set_footer(text=footer)
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message("Embed sent successfully!", ephemeral=True)
+    await interaction.channel.send(embed=embed)
 
 @tree.command(name="ban", description="Ban a user from the server")
 @app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
