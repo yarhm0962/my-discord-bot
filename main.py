@@ -54,7 +54,7 @@ TIMEOUT_DURATION = 300
 MENTION_WARNINGS_ENABLED = True
 IGNORED_WARNING_CHANNELS = set()
 IGNORED_WARNING_ROLES = set()
-PROTECTED_ROLES = set()  # Roles that trigger warnings when mentioned
+PROTECTED_ROLES = set()
 TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
 
@@ -535,7 +535,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
             color=discord.Colour.red()
         )
     
-    # Show current protected roles
     if PROTECTED_ROLES:
         role_list = []
         for role_id in PROTECTED_ROLES:
@@ -626,12 +625,10 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
-    # Check for protected role mentions (works for EVERYONE, including admins)
+    # Check for protected role mentions
     if PROTECTED_ROLES and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        # Check if the message author has an ignored role
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
-        # Protected roles warn EVERYONE except those with ignored roles
         if not has_ignored_role:
             mentioned_protected = False
             for role_mention in message.role_mentions:
@@ -677,13 +674,11 @@ async def on_message(message):
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
 
-    # Check for highest role mentions (admins are EXEMPT from this)
+    # Check for highest role mentions
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        # Check if the message author has an ignored role OR is an admin
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         is_admin = message.author.guild_permissions.administrator
         
-        # Skip if user has ignored role OR is an admin
         if not has_ignored_role and not is_admin:
             highest_role = max(message.guild.roles, key=lambda r: r.position)
             
@@ -749,10 +744,9 @@ async def show_commands(ctx):
 `/deobf file file:` - Deobfuscate uploaded .lua file
 `/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket` - Create a ticket panel
-`/create embed` - Create a custom embed
+`/create embed [plain-message:]` - Create a custom embed with optional plain text message
 `/ban user:@User` - Ban a user
-`/unban user_id:` - Unban a user by ID
-`/kick user:@User` - Kick a user
+`/unban user_id:` - Unban a user by ID`/kick user:@User` - Kick a user
 `/mute user:@User` - Mute a user with duration
 `/unmute user:@User` - Unmute a user
 """, inline=False)
@@ -930,17 +924,20 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     await interaction.response.send_message("Ticket panel created!", ephemeral=True)
     await interaction.channel.send(embed=embed, view=panel_view)
 
-@create_group.command(name="embed", description="Create a custom embed")
+@create_group.command(name="embed", description="Create a custom embed with optional plain message")
 @app_commands.describe(
     description="Required: The embed description text",
     title="Optional: The embed title",
     footer="Optional: The embed footer text",
     image="Optional: A large image to display on the embed",
-    color="Optional: Embed color (name or hex, default: green)"
+    color="Optional: Embed color (name or hex, default: green)",
+    plain_message="Optional: A plain text message to send before the embed (supports @everyone, @here, role and user mentions)"
 )
-async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green"):
+@app_commands.rename(plain_message="plain-message")
+async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", plain_message: str = ""):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
+    
     embed_color = get_color(color)
     embed = discord.Embed(description=description, color=embed_color)
     if title:
@@ -949,7 +946,15 @@ async def create_embed(interaction: discord.Interaction, description: str, title
         embed.set_footer(text=footer)
     if image:
         embed.set_image(url=image.url)
+    
     await interaction.response.send_message("Embed sent successfully!", ephemeral=True)
+    
+    # Send the plain message first if provided (with mentions enabled)
+    allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
+    if plain_message:
+        await interaction.channel.send(content=plain_message, allowed_mentions=allowed_mentions)
+    
+    # Send the embed
     await interaction.channel.send(embed=embed)
 
 @tree.command(name="ban", description="Ban a user from the server")
