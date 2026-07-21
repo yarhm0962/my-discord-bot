@@ -475,12 +475,12 @@ def build_ticket_actions_view(include_claim: bool = True):
 @app_commands.describe(
     admin_role="Required: Role that manages and responds to tickets",
     category="Required: Category where tickets will be created",
+    enable_claim_button="Required: Toggle the Claim Ticket button inside tickets (On/Off)",
     description="Optional: Custom panel description",
     title="Optional: Panel embed title",
     footer="Optional: Panel embed footer text",
     image="Optional: A large image to display on the panel embed",
     color="Optional: Panel embed color (name or hex, default: green)",
-    enable_claim_button="Optional: Toggle the Claim Ticket button inside tickets (default: On)",
     button_label="Optional: Text for the ticket creation button (default: Create Ticket)",
     button_emoji="Optional: Emoji for the ticket creation button (default: 🎟️)"
 )
@@ -490,7 +490,7 @@ def build_ticket_actions_view(include_claim: bool = True):
     button_label="button-label",
     button_emoji="button-emoji"
 )
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", enable_claim_button: bool = True, button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
+async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, enable_claim_button: bool, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required", ephemeral=True)
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
