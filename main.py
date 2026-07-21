@@ -16,6 +16,13 @@ try:
 except ImportError:
     HAS_GENAI = False
 
+# Try to import Groq
+try:
+    from groq import Groq
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
+
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is running"
@@ -57,6 +64,13 @@ IGNORED_WARNING_ROLES = set()
 PROTECTED_ROLES = set()
 TALKING_CHANNELS = {}
 VERIFIED_ROLE_CACHE = {}
+
+# Initialize Groq client
+GROQ_API_KEY = "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"
+if HAS_GROQ and GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+else:
+    groq_client = None
 
 def parse_time(time_str):
     if not time_str:
@@ -586,33 +600,150 @@ async def on_message(message):
     if message.guild.id in TALKING_CHANNELS and message.channel.id == TALKING_CHANNELS[message.guild.id]:
         if not message.content.startswith(bot.command_prefix):
             async with message.channel.typing():
-                gemini_key = os.getenv('GEMINI_API_KEY')
-                
-                if HAS_GENAI and gemini_key:
+                # Try Groq first
+                if HAS_GROQ and groq_client:
                     try:
-                        genai.configure(api_key=gemini_key)
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        # Get server info
+                        guild = message.guild
+                        member_count = guild.member_count
+                        guild_name = guild.name
+                        guild_id = guild.id
+                        guild_created = guild.created_at.strftime("%B %d, %Y")
+                        channel_name = message.channel.name
+                        channel_id = message.channel.id
                         
-                        prompt = (
-                            f"You are a helpful, intelligent Discord bot interacting in a server called '{message.guild.name}'. "
-                            f"The server currently has {message.guild.member_count} members. "
-                            f"The user you are replying to is named '{message.author.display_name}'. "
-                            f"You have deep knowledge of everything on Earth, especially Lua programming, scripting, and Discord mechanics. "
-                            f"Be friendly, concise (under 1800 characters), and format your text nicely for Discord. "
-                            f"\n\nUser says: {message.content}"
+                        # Count channels
+                        text_channels = len([c for c in guild.channels if isinstance(c, discord.TextChannel)])
+                        voice_channels = len([c for c in guild.channels if isinstance(c, discord.VoiceChannel)])
+                        categories = len([c for c in guild.channels if isinstance(c, discord.CategoryChannel)])
+                        
+                        # Get bot's role info
+                        bot_member = guild.get_member(bot.user.id)
+                        bot_role = bot_member.top_role if bot_member else None
+                        bot_role_name = bot_role.name if bot_role else "No role"
+                        
+                        # Get some random server stats
+                        total_roles = len(guild.roles)
+                        total_emojis = len(guild.emojis)
+                        total_stickers = len(guild.stickers) if hasattr(guild, 'stickers') else 0
+                        
+                        # Create a detailed server info prompt
+                        system_prompt = (
+                            f"You are a hilarious, witty, and super knowledgeable Discord bot named {bot.user.display_name}.\n\n"
+                            f"=== SERVER INFORMATION ===\n"
+                            f"Server Name: {guild_name}\n"
+                            f"Server ID: {guild_id}\n"
+                            f"Server Created: {guild_created}\n"
+                            f"Total Members: {member_count}\n"
+                            f"Text Channels: {text_channels}\n"
+                            f"Voice Channels: {voice_channels}\n"
+                            f"Categories: {categories}\n"
+                            f"Total Roles: {total_roles}\n"
+                            f"Total Emojis: {total_emojis}\n"
+                            f"Total Stickers: {total_stickers}\n"
+                            f"Current Channel: #{channel_name} (ID: {channel_id})\n"
+                            f"Bot's Highest Role: {bot_role_name}\n\n"
+                            f"=== YOUR PERSONALITY ===\n"
+                            f"You have an amazing sense of humor and love making people laugh.\n"
+                            f"You know EVERYTHING about:\n"
+                            f"- Lua programming (you're a Lua expert!)\n"
+                            f"- Roblox game development and scripting\n"
+                            f"- Discord bots and API\n"
+                            f"- Python, JavaScript, and all programming languages\n"
+                            f"- Gaming, memes, and internet culture\n"
+                            f"- Pretty much everything on Earth!\n\n"
+                            f"Your personality:\n"
+                            f"- You're funny, sarcastic (in a friendly way), and entertaining\n"
+                            f"- You love making jokes and puns\n"
+                            f"- You're super helpful and give detailed explanations\n"
+                            f"- You speak in a casual, friendly tone with emojis\n"
+                            f"- You sometimes use funny analogies to explain things\n"
+                            f"- You keep responses under 1800 characters\n"
+                            f"- You reference the server you're in and the user you're talking to\n"
+                            f"- You can answer questions about the server itself\n"
+                            f"- You know the server's name, member count, and channel info\n\n"
+                            f"User you're talking to: {message.author.display_name}\n"
+                            f"Their ID: {message.author.id}\n\n"
+                            f"Be helpful but make it FUN! Don't be boring. Add some personality!\n"
+                            f"Feel free to reference the server details in your responses.\n"
+                            f"If someone asks about the server, you can tell them about it!"
                         )
                         
-                        response = await model.generate_content_async(prompt)
-                        if response.text:
-                            await message.reply(response.text[:1990])
+                        # Prepare the messages for Groq
+                        messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": message.content}
+                        ]
+                        
+                        # Get response from Groq
+                        response = groq_client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=messages,
+                            temperature=0.8,
+                            max_tokens=800,
+                            top_p=1
+                        )
+                        
+                        if response and response.choices:
+                            reply = response.choices[0].message.content
+                            if reply:
+                                await message.reply(reply[:1990])
+                            else:
+                                await message.reply("🤔 Hmm, my brain is buffering... Try again?")
+                        else:
+                            await message.reply("😅 Oops! My AI brain glitched. Try again in a moment!")
+                            
+                    except Exception as e:
+                        print(f"Groq Error: {e}")
+                        await message.reply("⚠️ My AI brain ran into an error. Let me try again!")
+                
+                # Fallback to Gemini if Groq fails
+                elif HAS_GENAI:
+                    try:
+                        gemini_key = os.getenv('GEMINI_API_KEY')
+                        if gemini_key:
+                            genai.configure(api_key=gemini_key)
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            
+                            # Get server info for Gemini fallback
+                            guild = message.guild
+                            guild_name = guild.name
+                            member_count = guild.member_count
+                            channel_name = message.channel.name
+                            
+                            prompt = (
+                                f"You are a hilarious, witty, and super knowledgeable Discord bot named {bot.user.display_name}.\n\n"
+                                f"Server Name: {guild_name}\n"
+                                f"Total Members: {member_count}\n"
+                                f"Current Channel: #{channel_name}\n"
+                                f"User: {message.author.display_name}\n\n"
+                                f"You know EVERYTHING about Lua, Roblox, Discord bots, and more.\n"
+                                f"Be funny, sarcastic (in a friendly way), and entertaining.\n"
+                                f"Keep responses under 1800 characters.\n"
+                                f"Reference the server you're in and the user you're talking to.\n\n"
+                                f"User says: {message.content}"
+                            )
+                            
+                            response = await model.generate_content_async(prompt)
+                            if response.text:
+                                await message.reply(response.text[:1990])
+                            else:
+                                await message.reply("🤔 Hmm, my brain is buffering... Try again?")
+                        else:
+                            await message.reply(
+                                "⚠️ **AI is not properly configured!**\n"
+                                "To use the talking bot, the owner must:\n"
+                                "1. Install the package (`pip install groq`)\n"
+                                "2. The Groq API key is already set up."
+                            )
                     except Exception as e:
                         await message.reply("⚠️ My AI brain ran into an error processing that request.")
                 else:
                     await message.reply(
                         "⚠️ **AI is not properly configured!**\n"
                         "To use the talking bot, the owner must:\n"
-                        "1. Install the package (`pip install google-generativeai`)\n"
-                        "2. Add a `GEMINI_API_KEY` to the environment variables."
+                        "1. Install the package (`pip install groq`)\n"
+                        "2. The Groq API key is already set up."
                     )
             return
 
@@ -733,7 +864,7 @@ async def show_commands(ctx):
     embed.add_field(name="Auto-Features", value="""
 **Mention Protection** - Auto-warns & times out NON-ADMIN users who mention the highest role 3 times
 **Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
-**AI Talking Bot** - Chats contextually in designated channels
+**AI Talking Bot** - Chats contextually in designated channels with humor and knowledge
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
@@ -746,7 +877,8 @@ async def show_commands(ctx):
 `/create ticket` - Create a ticket panel
 `/create embed [plain-message:]` - Create a custom embed with optional plain text message
 `/ban user:@User` - Ban a user
-`/unban user_id:` - Unban a user by ID`/kick user:@User` - Kick a user
+`/unban user_id:` - Unban a user by ID
+`/kick user:@User` - Kick a user
 `/mute user:@User` - Mute a user with duration
 `/unmute user:@User` - Unmute a user
 """, inline=False)
@@ -1084,6 +1216,7 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    print(f"Groq API: {'✅ Connected' if HAS_GROQ and groq_client else '❌ Not connected'}")
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
