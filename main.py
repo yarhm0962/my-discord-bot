@@ -10,6 +10,12 @@ from datetime import timedelta
 from discord import app_commands, File
 from discord.ext import commands
 
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 app = Flask('')
 @app.route('/')
 def home(): return "Bot is running"
@@ -18,29 +24,34 @@ def keep_alive(): Thread(target=run).start()
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # ⚠️ REQUIRED for the /add verify command to loop through all server members
 
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
-# --- COMMAND GROUPS (Allows for spaces in command names) ---
 create_group = app_commands.Group(name="create", description="Commands for creation")
 warning_group = app_commands.Group(name="warning", description="Warning system commands")
 deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
+talking_group = app_commands.Group(name="talking", description="Commands for the AI chatbot")
 auto_group = app_commands.Group(name="auto", description="Automation commands")
 auto_purge_group = app_commands.Group(name="purge", description="Auto purge commands", parent=auto_group)
+add_group = app_commands.Group(name="add", description="Add server features")
 
 tree.add_command(create_group)
 tree.add_command(warning_group)
 tree.add_command(deobf_group)
+tree.add_command(talking_group)
 tree.add_command(auto_group)
+tree.add_command(add_group)
 
 TICKET_SETTINGS = {}
 WARNINGS = {}
-AUTO_PURGE_SETTINGS = {}  # channel_id -> {"duration": seconds, "task": asyncio.Task, "label": "1h"}
-TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
-MENTION_WARNINGS_ENABLED = True  # Default state for highest role mention warnings
-IGNORED_WARNING_CHANNELS = set()  # Store channel IDs where mention warnings are disabled
-IGNORED_WARNING_ROLES = set()  # Store role IDs that bypass mention warnings
+AUTO_PURGE_SETTINGS = {}
+TIMEOUT_DURATION = 300
+MENTION_WARNINGS_ENABLED = True
+IGNORED_WARNING_CHANNELS = set()
+IGNORED_WARNING_ROLES = set()
+TALKING_CHANNELS = {}
 
 def parse_time(time_str):
     if not time_str:
@@ -182,7 +193,6 @@ async def deobfuscate_from_url(url):
         return None, f"Fetch Error: {str(e)[:80]}"
 
 async def schedule_auto_purge(channel_id):
-    """Waits for the configured inactivity duration, then purges the channel if no new message reset it."""
     settings = AUTO_PURGE_SETTINGS.get(channel_id)
     if not settings:
         return
@@ -190,7 +200,6 @@ async def schedule_auto_purge(channel_id):
         await asyncio.sleep(settings["duration"])
     except asyncio.CancelledError:
         return
-    # Make sure the channel wasn't removed from auto-purge while we were sleeping
     if AUTO_PURGE_SETTINGS.get(channel_id) is not settings:
         return
     channel = bot.get_channel(channel_id)
@@ -201,7 +210,6 @@ async def schedule_auto_purge(channel_id):
         purged_count = len(deleted)
     except Exception:
         purged_count = 0
-    # Require fresh activity (2 messages) again before this can trigger next time
     settings["message_count"] = 0
     settings["task"] = None
     embed = discord.Embed(
@@ -216,6 +224,89 @@ async def schedule_auto_purge(channel_id):
     except Exception:
         pass
 
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # Handle the verification button globally so it survives bot restarts
+    if interaction.type == discord.InteractionType.component:
+        custom_id = interaction.data.get("custom_id", "")
+        if custom_id.startswith("verify_btn_"):
+            try:
+                role_id = int(custom_id.split("_")[2])
+                verified_role = interaction.guild.get_role(role_id)
+                not_verified_role = discord.utils.get(interaction.guild.roles, name="Not Verified")
+
+                if not verified_role:
+                    return await interaction.response.send_message("❌ Error: The verified role no longer exists.", ephemeral=True)
+
+                await interaction.user.add_roles(verified_role)
+                if not_verified_role and not_verified_role in interaction.user.roles:
+                    await interaction.user.remove_roles(not_verified_role)
+
+                await interaction.response.send_message("✅ You have been successfully verified!", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Error: I don't have permission to manage roles. Please ask an admin to move my bot role higher.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
+@add_group.command(name="verify", description="Set up a verification system and give all unverified members a Not Verified role")
+@app_commands.describe(role="Required: The role to give users when they verify")
+async def add_verify(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
+
+    # 1. Check for or create the "Not Verified" role
+    not_verified_role = discord.utils.get(interaction.guild.roles, name="Not Verified")
+    if not not_verified_role:
+        try:
+            not_verified_role = await interaction.guild.create_role(
+                name="Not Verified", 
+                color=discord.Colour.dark_grey(), 
+                reason="Auto-created for verification system"
+            )
+        except discord.Forbidden:
+            return await interaction.followup.send("❌ Error: I lack permission to manage roles. Please check my role hierarchy.")
+        except Exception as e:
+            return await interaction.followup.send(f"❌ Error creating 'Not Verified' role: {str(e)}")
+
+    # 2. Add "Not Verified" to everyone who is missing the verified role
+    assigned_count = 0
+    for member in interaction.guild.members:
+        if not member.bot and role not in member.roles and not_verified_role not in member.roles:
+            try:
+                await member.add_roles(not_verified_role)
+                assigned_count += 1
+                await asyncio.sleep(0.1) # Pause slightly to prevent Discord rate limits
+            except discord.Forbidden:
+                return await interaction.followup.send("❌ Error: I lack permission to give roles to some users. Please move my bot role higher up the list!")
+            except Exception:
+                pass 
+
+    # 3. Create and send the Verification Embed
+    embed = discord.Embed(
+        title="🔐 Server Verification",
+        description=(
+            "Welcome to the server! We are glad to have you here.\n\n"
+            "To gain access to all the channels and features, please verify yourself by clicking the **Verify** button below.\n"
+            "This helps us keep the server safe and secure."
+        ),
+        color=discord.Colour.green()
+    )
+    embed.set_footer(text="Verification System")
+
+    view = discord.ui.View(timeout=None)
+    btn = discord.ui.Button(
+        label="Click to Verify",
+        emoji="👥",
+        style=discord.ButtonStyle.success,
+        custom_id=f"verify_btn_{role.id}"
+    )
+    view.add_item(btn)
+
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.followup.send(f"✅ Verification panel setup complete! Gave the 'Not Verified' role to **{assigned_count}** members.")
+
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
 async def say_message(interaction: discord.Interaction, message: str):
@@ -225,6 +316,20 @@ async def say_message(interaction: discord.Interaction, message: str):
     await interaction.response.send_message("Message sent successfully!", ephemeral=True)
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
+
+@talking_group.command(name="bot", description="Set a specific channel for the AI talking bot to chat with users")
+@app_commands.describe(channel="Required: The channel where the bot will reply to user messages")
+async def setup_talking_bot(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
+    
+    TALKING_CHANNELS[interaction.guild.id] = channel.id
+    embed = discord.Embed(
+        title="🤖 Talking Bot Configured", 
+        description=f"The AI chatbot is now active in {channel.mention}!\nAny message sent there will be answered by the bot.", 
+        color=discord.Colour.blue()
+    )
+    await interaction.response.send_message(embed=embed)
 
 @warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(
@@ -277,40 +382,44 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
         
     await interaction.response.send_message(embed=embed)
 
-@auto_purge_group.command(name="messages", description="Auto purge a channel after a period of inactivity")
-@app_commands.describe(
-    channel="Required: The channel where auto purge will apply",
-    time="Required: Inactivity duration before purge, e.g. 1s, 1m, 1h, 1d"
-)
-async def auto_purge_messages(interaction: discord.Interaction, channel: discord.TextChannel, time: str):
-    if not interaction.user.guild_permissions.manage_messages:
-        return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
-
-    duration = parse_time(time)
-    if not duration:
-        return await interaction.response.send_message("Error: Invalid time format. Use formats like 1s, 1m, 1h, 1d", ephemeral=True)
-
-    AUTO_PURGE_SETTINGS[channel.id] = {
-        "duration": duration,
-        "task": None,
-        "label": time,
-        "message_count": 0,
-        "guild_id": interaction.guild.id
-    }
-
-    embed = discord.Embed(title="🧹 Auto Purge Enabled", color=discord.Colour.green())
-    embed.add_field(name="Channel", value=channel.mention, inline=False)
-    embed.add_field(name="Inactivity Duration", value=f"**{time}**", inline=False)
-    embed.add_field(name="Behavior", value="Every new message in this channel resets the timer. Once the channel goes quiet for the set duration, all messages in it are purged.", inline=False)
-    embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
-    await interaction.response.send_message(embed=embed)
-
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return await bot.process_commands(message)
 
-    # --- AUTO PURGE: count messages and (re)start the inactivity timer once 2+ have been sent ---
+    if message.guild.id in TALKING_CHANNELS and message.channel.id == TALKING_CHANNELS[message.guild.id]:
+        if not message.content.startswith(bot.command_prefix):
+            async with message.channel.typing():
+                gemini_key = os.getenv('GEMINI_API_KEY')
+                
+                if HAS_GENAI and gemini_key:
+                    try:
+                        genai.configure(api_key=gemini_key)
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        
+                        prompt = (
+                            f"You are a helpful, intelligent Discord bot interacting in a server called '{message.guild.name}'. "
+                            f"The server currently has {message.guild.member_count} members. "
+                            f"The user you are replying to is named '{message.author.display_name}'. "
+                            f"You have deep knowledge of everything on Earth, especially Lua programming, scripting, and Discord mechanics. "
+                            f"Be friendly, concise (under 1800 characters), and format your text nicely for Discord. "
+                            f"\n\nUser says: {message.content}"
+                        )
+                        
+                        response = await model.generate_content_async(prompt)
+                        if response.text:
+                            await message.reply(response.text[:1990])
+                    except Exception as e:
+                        await message.reply("⚠️ My AI brain ran into an error processing that request.")
+                else:
+                    await message.reply(
+                        "⚠️ **AI is not properly configured!**\n"
+                        "To use the talking bot, the owner must:\n"
+                        "1. Install the package (`pip install google-generativeai`)\n"
+                        "2. Add a `GEMINI_API_KEY` to the environment variables."
+                    )
+            return
+
     if message.channel.id in AUTO_PURGE_SETTINGS:
         settings = AUTO_PURGE_SETTINGS[message.channel.id]
         settings["message_count"] = settings.get("message_count", 0) + 1
@@ -320,20 +429,13 @@ async def on_message(message):
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
 
-    # --- MENTION WARNING LOGIC ---
-    # Check if mention warnings are enabled globally and channel is not ignored
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
-        
-        # Check if the user is an admin OR has an ignored role
         is_admin = message.author.guild_permissions.administrator
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         
-        # Only process warnings if they are NOT an admin and DO NOT have an ignored role
         if not is_admin and not has_ignored_role:
-            # Get highest role in server
             highest_role = max(message.guild.roles, key=lambda r: r.position)
             
-            # Check if highest role is mentioned OR any user with highest role is mentioned
             mentioned_highest = False
             if highest_role in message.role_mentions:
                 mentioned_highest = True
@@ -365,12 +467,12 @@ async def on_message(message):
                         embed = discord.Embed(title="⚠️ Warning 3/3 — User Timed Out!", color=discord.Colour.red())
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
-                        WARNINGS[guild_id][user_id] = 0  # ✅ FULLY RESET TO 0 AFTER TIMEOUT
+                        WARNINGS[guild_id][user_id] = 0
                     except Exception as e:
                         embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
-                        WARNINGS[guild_id][user_id] = 0  # ✅ RESET EVEN IF TIMEOUT FAILS
+                        WARNINGS[guild_id][user_id] = 0
         
     await bot.process_commands(message)
 
@@ -384,8 +486,11 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Auto-Features", value="""
 **Mention Protection** - Auto-warns & times out users who mention the highest role 3 times
+**AI Talking Bot** - Chats contextually in designated channels
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
+`/talking bot channel:#channel` - Set up a channel where the bot will chat using AI
+`/add verify role:@role` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
 `/warning mention status:[On/Off] [ignored-channel:] [ignore-role:]` - Toggle mention warnings and exclude specific channels or roles
 `/deobf file file:` - Deobfuscate uploaded .lua file
@@ -479,7 +584,6 @@ def build_ticket_actions_view(include_claim: bool = True):
                 description=f"{interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
                 color=discord.Colour.yellow()
             )
-            # Disable the button on the original message so it can only be clicked once
             claim_btn.disabled = True
             claim_btn.label = f"Claimed by {interaction.user.display_name}"
             await interaction.response.edit_message(view=claim_btn.view)
@@ -530,7 +634,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         if not ticket_category or not staff_role:
             return await btn_interaction.response.send_message("Error: Category or Admin Role was not found", ephemeral=True)
 
-        # --- PREVENT DUPLICATE OPEN TICKETS ---
         for ch_id, ch_data in list(TICKET_SETTINGS.items()):
             if isinstance(ch_data, dict) and ch_data.get("creator_id") == btn_interaction.user.id:
                 existing_channel = guild.get_channel(ch_id)
