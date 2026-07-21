@@ -7,7 +7,7 @@ import aiohttp
 import asyncio
 import discord
 from datetime import timedelta
-from discord import app_commands, File
+from discord import app_commands
 from discord.ext import commands
 
 try:
@@ -25,6 +25,7 @@ def keep_alive(): Thread(target=run).start()
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # ⚠️ REQUIRED for the /add verify command to loop through all server members
+intents.guilds = True  # Required for member join events
 
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
@@ -52,6 +53,7 @@ MENTION_WARNINGS_ENABLED = True
 IGNORED_WARNING_CHANNELS = set()
 IGNORED_WARNING_ROLES = set()
 TALKING_CHANNELS = {}
+VERIFIED_ROLE_CACHE = {}  # Cache for verified role per guild
 
 def parse_time(time_str):
     if not time_str:
@@ -225,6 +227,31 @@ async def schedule_auto_purge(channel_id):
         pass
 
 @bot.event
+async def on_member_join(member):
+    """Automatically assign 'Not Verified' role to new members if verification system is set up"""
+    if member.bot:
+        return
+    
+    # Check if this guild has a verified role cached
+    if member.guild.id not in VERIFIED_ROLE_CACHE:
+        return
+    
+    verified_role = VERIFIED_ROLE_CACHE[member.guild.id]
+    not_verified_role = discord.utils.get(member.guild.roles, name="Not Verified")
+    
+    # If the Not Verified role doesn't exist or the member already has verified role, skip
+    if not not_verified_role or verified_role in member.roles:
+        return
+    
+    try:
+        await member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role on join")
+        print(f"✅ Assigned 'Not Verified' role to {member.name} in {member.guild.name}")
+    except discord.Forbidden:
+        print(f"❌ Missing permission to assign 'Not Verified' role to {member.name}")
+    except Exception as e:
+        print(f"❌ Error assigning 'Not Verified' role to {member.name}: {e}")
+
+@bot.event
 async def on_interaction(interaction: discord.Interaction):
     # Handle the verification button globally so it survives bot restarts
     if interaction.type == discord.InteractionType.component:
@@ -259,6 +286,9 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
+
+    # Cache the verified role for this guild
+    VERIFIED_ROLE_CACHE[interaction.guild.id] = role
 
     # 1. Check for or create the "Not Verified" role
     not_verified_role = discord.utils.get(interaction.guild.roles, name="Not Verified")
@@ -342,7 +372,9 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     await interaction.followup.send(
         f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
         f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
-        f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*")
+        f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*\n\n"
+        f"🔄 **New members will automatically receive the 'Not Verified' role upon joining!**"
+    )
 
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
@@ -610,7 +642,7 @@ async def deobf_prefix(ctx, *, link: str):
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(deobf_code)
     await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
-    await ctx.send(file=File(filename))
+    await ctx.send(file=discord.File(filename))
     os.remove(filename)
 
 @deobf_group.command(name="file", description="Upload a .lua file to deobfuscate")
@@ -627,7 +659,7 @@ async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment
     filename = f"deobfuscated_{interaction.id}.lua"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(deobf_code)
-    await interaction.followup.send(content="Success: File deobfuscated successfully", file=File(filename))
+    await interaction.followup.send(content="Success: File deobfuscated successfully", file=discord.File(filename))
     os.remove(filename)
 
 async def close_ticket_callback(interaction: discord.Interaction):
