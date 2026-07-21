@@ -22,6 +22,15 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
+# --- COMMAND GROUPS (Allows for spaces in command names) ---
+create_group = app_commands.Group(name="create", description="Commands for creation")
+warning_group = app_commands.Group(name="warning", description="Warning system commands")
+deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
+
+tree.add_command(create_group)
+tree.add_command(warning_group)
+tree.add_command(deobf_group)
+
 TICKET_SETTINGS = {}
 WARNINGS = {}
 TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
@@ -175,7 +184,7 @@ async def say_message(interaction: discord.Interaction, message: str):
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
 
-@tree.command(name="warning-mention", description="Toggle mention warnings for the highest role On or Off")
+@warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(
     status="Select whether to turn mention warnings On or Off",
     ignored_channel="Optional: Select a channel where mention warnings will be ignored"
@@ -280,10 +289,10 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/say message:` - Send a custom message as the bot with mentions
-`/warning-mention status:[On/Off] [ignored_channel:]` - Toggle mention warnings and exclude specific channels
-`/deobf-file file:` - Deobfuscate uploaded .lua file
-`/create-ticket` - Create a ticket panel
-`/create-embed` - Create a custom embed
+`/warning mention status:[On/Off] [ignored_channel:]` - Toggle mention warnings and exclude specific channels
+`/deobf file file:` - Deobfuscate uploaded .lua file
+`/create ticket` - Create a ticket panel
+`/create embed` - Create a custom embed
 `/ban user:@User` - Ban a user
 `/unban user_id:` - Unban a user by ID
 `/kick user:@User` - Kick a user
@@ -316,7 +325,7 @@ async def deobf_prefix(ctx, *, link: str):
     await ctx.send(file=File(filename))
     os.remove(filename)
 
-@tree.command(name="deobf-file", description="Upload a .lua file to deobfuscate")
+@deobf_group.command(name="file", description="Upload a .lua file to deobfuscate")
 @app_commands.describe(file="Upload your obfuscated .lua file")
 async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment):
     if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
@@ -349,7 +358,7 @@ class CloseTicketView(discord.ui.View):
         await asyncio.sleep(3)
         await interaction.channel.delete()
 
-@tree.command(name="create-ticket", description="Create a ticket panel")
+@create_group.command(name="ticket", description="Create a ticket panel")
 @app_commands.describe(
     admin_role="Required: Role that manages and responds to tickets",
     category="Required: Category where tickets will be created",
@@ -413,7 +422,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     embed = discord.Embed(description=panel_description, color=embed_color)
     await interaction.response.send_message(embed=embed, view=TicketPanel())
 
-@tree.command(name="create-embed", description="Create a custom embed")
+@create_group.command(name="embed", description="Create a custom embed")
 @app_commands.describe(
     description="Required: The embed description text",
     color="Optional: Embed color (name or hex, default: green)"
