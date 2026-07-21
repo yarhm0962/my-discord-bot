@@ -26,13 +26,17 @@ tree = bot.tree
 create_group = app_commands.Group(name="create", description="Commands for creation")
 warning_group = app_commands.Group(name="warning", description="Warning system commands")
 deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
+auto_group = app_commands.Group(name="auto", description="Automation commands")
+auto_purge_group = app_commands.Group(name="purge", description="Auto purge commands", parent=auto_group)
 
 tree.add_command(create_group)
 tree.add_command(warning_group)
 tree.add_command(deobf_group)
+tree.add_command(auto_group)
 
 TICKET_SETTINGS = {}
 WARNINGS = {}
+AUTO_PURGE_SETTINGS = {}  # channel_id -> {"duration": seconds, "task": asyncio.Task, "label": "1h"}
 TIMEOUT_DURATION = 300  # Auto-timeout: 5 minutes = 300 seconds
 MENTION_WARNINGS_ENABLED = True  # Default state for highest role mention warnings
 IGNORED_WARNING_CHANNELS = set()  # Store channel IDs where mention warnings are disabled
@@ -40,12 +44,14 @@ IGNORED_WARNING_CHANNELS = set()  # Store channel IDs where mention warnings are
 def parse_time(time_str):
     if not time_str:
         return None
-    match = re.match(r'(\d+)([mhd])', time_str.lower().strip())
+    match = re.match(r'(\d+)([smhd])', time_str.lower().strip())
     if not match:
         return None
     amount = int(match.group(1))
     unit = match.group(2)
-    if unit == 'm':
+    if unit == 's':
+        return amount
+    elif unit == 'm':
         return amount * 60
     elif unit == 'h':
         return amount * 3600
@@ -174,6 +180,35 @@ async def deobfuscate_from_url(url):
     except Exception as e:
         return None, f"Fetch Error: {str(e)[:80]}"
 
+async def schedule_auto_purge(channel_id):
+    """Waits for the configured inactivity duration, then purges the channel if no new message reset it."""
+    settings = AUTO_PURGE_SETTINGS.get(channel_id)
+    if not settings:
+        return
+    try:
+        await asyncio.sleep(settings["duration"])
+    except asyncio.CancelledError:
+        return
+    # Make sure the channel wasn't removed from auto-purge while we were sleeping
+    if AUTO_PURGE_SETTINGS.get(channel_id) is not settings:
+        return
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        return
+    try:
+        await channel.purge(limit=None)
+    except Exception:
+        pass
+    # Require fresh activity (2 messages) again before this can trigger next time
+    settings["message_count"] = 0
+    settings["task"] = None
+    embed = discord.Embed(title="🧹 Auto Purge Completed", color=discord.Colour.green())
+    embed.description = f"All messages in {channel.mention} were automatically purged after **{settings['label']}** of inactivity."
+    try:
+        await channel.send(embed=embed)
+    except Exception:
+        pass
+
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
 async def say_message(interaction: discord.Interaction, message: str):
@@ -225,11 +260,49 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
         
     await interaction.response.send_message(embed=embed)
 
+@auto_purge_group.command(name="messages", description="Auto purge a channel after a period of inactivity")
+@app_commands.describe(
+    channel="Required: The channel where auto purge will apply",
+    time="Required: Inactivity duration before purge, e.g. 1s, 1m, 1h, 1d"
+)
+async def auto_purge_messages(interaction: discord.Interaction, channel: discord.TextChannel, time: str):
+    if not interaction.user.guild_permissions.manage_messages:
+        return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
+
+    duration = parse_time(time)
+    if not duration:
+        return await interaction.response.send_message("Error: Invalid time format. Use formats like 1s, 1m, 1h, 1d", ephemeral=True)
+
+    AUTO_PURGE_SETTINGS[channel.id] = {
+        "duration": duration,
+        "task": None,
+        "label": time,
+        "message_count": 0,
+        "guild_id": interaction.guild.id
+    }
+
+    embed = discord.Embed(title="🧹 Auto Purge Enabled", color=discord.Colour.green())
+    embed.add_field(name="Channel", value=channel.mention, inline=False)
+    embed.add_field(name="Inactivity Duration", value=f"**{time}**", inline=False)
+    embed.add_field(name="Behavior", value="Every new message in this channel resets the timer. Once the channel goes quiet for the set duration, all messages in it are purged.", inline=False)
+    embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
+    await interaction.response.send_message(embed=embed)
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return await bot.process_commands(message)
-    
+
+    # --- AUTO PURGE: count messages and (re)start the inactivity timer once 2+ have been sent ---
+    if message.channel.id in AUTO_PURGE_SETTINGS:
+        settings = AUTO_PURGE_SETTINGS[message.channel.id]
+        settings["message_count"] = settings.get("message_count", 0) + 1
+        if settings["message_count"] >= 2:
+            existing_task = settings.get("task")
+            if existing_task and not existing_task.done():
+                existing_task.cancel()
+            settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
+
     # Check if mention warnings are enabled globally and channel is not ignored
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
         # Get highest role in server
@@ -291,6 +364,7 @@ async def show_commands(ctx):
 `/say message:` - Send a custom message as the bot with mentions
 `/warning mention status:[On/Off] [ignored_channel:]` - Toggle mention warnings and exclude specific channels
 `/deobf file file:` - Deobfuscate uploaded .lua file
+`/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket` - Create a ticket panel
 `/create embed` - Create a custom embed
 `/ban user:@User` - Ban a user
