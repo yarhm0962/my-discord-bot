@@ -409,16 +409,38 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         except Exception:
             pass # Ignore channels the bot cannot edit
 
-    # 4. Add "Not Verified" to everyone who is missing the verified role
+    # 4. Add "Not Verified" to everyone who is missing the verified role - FAST VERSION
     assigned_count = 0
+    failed_members = []
+    
+    # Gather all members who need the role
+    members_to_update = []
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
-            try:
-                await member.add_roles(not_verified_role)
+            members_to_update.append(member)
+    
+    # Process members in batches to avoid rate limits while being fast
+    batch_size = 10  # Process 10 members at a time
+    for i in range(0, len(members_to_update), batch_size):
+        batch = members_to_update[i:i + batch_size]
+        tasks = []
+        for member in batch:
+            task = member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role")
+            tasks.append(task)
+        
+        # Wait for all tasks in this batch to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Count successes and failures
+        for result in results:
+            if isinstance(result, Exception):
+                failed_members.append(str(result))
+            else:
                 assigned_count += 1
-                await asyncio.sleep(0.1)
-            except Exception:
-                pass 
+        
+        # Small delay between batches to prevent rate limiting
+        if i + batch_size < len(members_to_update):
+            await asyncio.sleep(0.5)
 
     # 5. Create and send the Verification Embed to the specified channel
     embed = discord.Embed(
@@ -442,12 +464,16 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     view.add_item(btn)
 
     await enabled_channel.send(embed=embed, view=view)
-    await interaction.followup.send(
-        f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
-        f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
-        f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*\n\n"
-        f"🔄 **New members will automatically receive the 'Not Verified' role upon joining!**"
-    )
+    
+    # Send completion message with stats
+    success_message = f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
+    success_message += f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
+    if failed_members:
+        success_message += f"⚠️ Failed to assign role to {len(failed_members)} members.\n"
+    success_message += f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*\n\n"
+    success_message += f"🔄 **New members will automatically receive the 'Not Verified' role upon joining!**"
+    
+    await interaction.followup.send(success_message)
 
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
