@@ -8,7 +8,6 @@ import asyncio
 import discord
 import random
 import json
-import subprocess
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -68,7 +67,6 @@ def load_warnings():
         if os.path.exists(WARNINGS_FILE):
             with open(WARNINGS_FILE, 'r') as f:
                 data = json.load(f)
-                # Convert string keys back to int for compatibility
                 return {int(g): {int(u): c for u, c in users.items()} for g, users in data.items()}
     except Exception as e:
         print(f"Error loading warnings: {e}")
@@ -77,7 +75,6 @@ def load_warnings():
 def save_warnings(warnings):
     """Save warnings to JSON file"""
     try:
-        # Convert int keys to str for JSON serialization
         data = {str(g): {str(u): c for u, c in users.items()} for g, users in warnings.items()}
         with open(WARNINGS_FILE, 'w') as f:
             json.dump(data, f)
@@ -311,13 +308,11 @@ if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
 
 def deobfuscate_lua_code(content):
     """Deobfuscate Lua code using string manipulation"""
-    # Try to find the string table
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
         return None, "String table not found"
     var_name = match.group(1)
 
-    # Try to extract the string table
     table_pattern = r'local ' + var_name + r'=\{"([^}]*)\"}'
     table_match = re.search(table_pattern, content, re.DOTALL)
     
@@ -325,7 +320,6 @@ def deobfuscate_lua_code(content):
     result.append("-- Deobfuscated Code --\n")
     result.append("-- Original script structure preserved --\n\n")
     
-    # Add the original code with some annotations
     lines = content.split('\n')
     for line in lines:
         if 'loadstring' in line.lower() or 'pcall' in line.lower():
@@ -794,8 +788,15 @@ async def deobf_code(interaction: discord.Interaction, code: str):
 
 @bot.event
 async def on_message(message):
-    if message.author.bot or not message.guild:
-        return await bot.process_commands(message)
+    # Always process commands first
+    if message.author.bot:
+        return
+    
+    # Process commands before anything else
+    await bot.process_commands(message)
+    
+    if not message.guild:
+        return
 
     if message.channel.id in AUTO_PURGE_SETTINGS:
         settings = AUTO_PURGE_SETTINGS[message.channel.id]
@@ -914,12 +915,12 @@ async def on_message(message):
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
-        
-    await bot.process_commands(message)
 
 @bot.command(name='cmds')
 async def show_commands(ctx):
-    if ctx.author.bot: return
+    if ctx.author.bot: 
+        return
+    
     embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
     embed.add_field(name="Prefix Commands", value="""
 `.d <link>` - Deobfuscate from URL
@@ -947,6 +948,7 @@ async def show_commands(ctx):
 `/unmute user:@User` - Unmute a user
 """, inline=False)
     embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
+    
     await ctx.send(embed=embed)
     try:
         await ctx.message.delete()
@@ -955,19 +957,24 @@ async def show_commands(ctx):
 
 @bot.command(name='d')
 async def deobf_prefix(ctx, *, link: str):
-    if ctx.author.bot: return
+    if ctx.author.bot: 
+        return
+    
     status_msg = await ctx.send("Processing...")
     url = extract_url(link)
     if not url:
         if "api.pastes.io" in link:
             return await status_msg.edit(content="Error: api.pastes.io does not exist! Use valid links like https://rentry.co/raw/XXX")
         return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
+    
     deobf_code, error = await deobfuscate_from_url(url)
     if error:
         return await status_msg.edit(content=f"Error: {error}")
+    
     filename = f"deobfuscated_{ctx.message.id}.lua"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(deobf_code)
+    
     await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
     await ctx.send(file=discord.File(filename))
     os.remove(filename)
