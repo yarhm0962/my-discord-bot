@@ -1105,43 +1105,44 @@ async def on_message(message):
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
 
-# ---- FIXED .cmds COMMAND ----
+# ---- FIXED .cmds COMMAND (NO EMBED REQUIRED) ----
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot:
         return
-    print(f".cmds command triggered by {ctx.author}")  # Debug print
-    embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
-    embed.add_field(name="Prefix Commands", value="""
-`.d <link>` - Deobfuscate from URL
-`.cmds` - Show this command list
-`.purge <amount>` - Delete a specified number of messages (max 1000) instantly
-""", inline=False)
-    embed.add_field(name="Auto-Features", value="""
-**Mention Protection** - Auto-warns & times out NON-ADMIN users who mention the highest role 3 times
-**Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
-""", inline=False)
-    embed.add_field(name="Slash Commands", value="""
-`/deobf file file:` - Deobfuscate from uploaded .lua file
-`/deobf code code:` - Deobfuscate from pasted Lua code
-`/instant permissions` - Instantly disable @everyone messaging in ALL channels
-`/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
-`/say message:` - Send a custom message as the bot with mentions
-`/warning mention status:[On/Off] [ignored-channel:] [ignore-role:] [protected-role:]` - Toggle mention warnings, exclude channels/roles, and protect roles
-`/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
-`/create ticket admin-role:@role category:#category select-channel:#channel enable-claim-button:On/Off` - Create a ticket panel
-`/create embed [plain-message:]` - Create a custom embed with optional plain text message (both in one message)
-`/ban user:@User` - Ban a user
-`/unban user_id:` - Unban a user by ID
-`/kick user:@User` - Kick a user
-`/mute user:@User` - Mute a user with duration
-`/unmute user:@User` - Unmute a user
-""", inline=False)
-    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-    try:
-        await ctx.send(embed=embed)
-    except Exception as e:
-        print(f"Error sending .cmds response: {e}")
+    print(f".cmds triggered by {ctx.author}")  # debug
+
+    # Build a nicely formatted text message (no embed required)
+    message = (
+        "**📋 Bot Commands**\n\n"
+        "**Prefix Commands**\n"
+        "`.d <link>` – Deobfuscate from URL\n"
+        "`.cmds` – Show this command list\n"
+        "`.purge <amount>` – Delete messages (max 1000)\n\n"
+        "**Auto‑Features**\n"
+        "• **Mention Protection** – Auto‑warns & times out NON‑ADMIN users who mention the highest role 3 times\n"
+        "• **Protected Roles** – Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned\n\n"
+        "**Slash Commands**\n"
+        "`/deobf file:` – Deobfuscate from uploaded `.lua` file\n"
+        "`/deobf code:` – Deobfuscate from pasted Lua code\n"
+        "`/instant permissions` – Instantly disable @everyone messaging in ALL channels\n"
+        "`/add verify` – Set up verification system\n"
+        "`/say` – Send a custom message with mentions\n"
+        "`/warning mention` – Toggle mention warnings, exclude channels/roles, protect roles\n"
+        "`/auto purge messages` – Auto‑purge a channel after inactivity\n"
+        "`/create ticket` – Create a ticket panel\n"
+        "`/create embed` – Create a custom embed with optional plain text message\n"
+        "`/ban` – Ban a user\n"
+        "`/unban` – Unban a user by ID\n"
+        "`/kick` – Kick a user\n"
+        "`/mute` – Mute a user with duration\n"
+        "`/unmute` – Unmute a user"
+    )
+
+    # Send the text message (works without Embed Links permission)
+    await ctx.send(message)
+
+    # Delete the command message if possible
     try:
         await ctx.message.delete()
     except:
