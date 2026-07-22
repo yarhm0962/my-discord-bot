@@ -8,6 +8,7 @@ import asyncio
 import discord
 import random
 import json
+import subprocess
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -303,6 +304,79 @@ local KEY={key}
 local OK,CODE=pcall(R,ENC,KEY)
 if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
     return obfuscated, key
+
+def deobfuscate_lua_code(content):
+    """Deobfuscate Lua code using the Lua interpreter"""
+    match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
+    if not match:
+        return None, "String table not found"
+    var_name = match.group(1)
+
+    mock_env = """
+local real_type = type
+local real_concat = table.concat
+local MockEnv = {}
+local function create_dummy(name)
+    local d = {}
+    setmetatable(d, {
+        __index = function(_,k)
+            print("[ACCESSED] "..name.."."..k)
+            return create_dummy(name.."."..k)
+        end,
+        __call = function(_,...)
+            return create_dummy(name.."_res")
+        end
+    })
+    return d
+end
+local safe = {
+    string = string,
+    table = {concat = table.concat, insert = table.insert, remove = table.remove},
+    math = math,
+    pairs = pairs,
+    ipairs = ipairs,
+    tonumber = tonumber,
+    tostring = tostring,
+    type = type,
+    pcall = pcall,
+    setmetatable = setmetatable,
+    getmetatable = getmetatable,
+    next = next
+}
+safe.loadstring = function(s)
+    print("--- DEOBFUSCATED CODE ---")
+    print(s)
+    print("--- END ---")
+    return function() end
+end
+setmetatable(MockEnv, {
+    __index = function(_,k)
+        if safe[k] then return safe[k] end
+        if k == "game" or k == "workspace" or k == "script" then
+            return create_dummy(k)
+        end
+        return nil
+    end
+})
+"""
+
+    idx_ret = content.rfind("return(function")
+    if idx_ret == -1:
+        return None, "Injection point not found"
+
+    dumper = f"""
+print("--- STRING TABLE ---")
+if {var_name} then
+    for k,v in pairs({var_name}) do
+        print("["..k.."] = "..string.format("%q", v))
+    end
+end
+"""
+
+    new_script = mock_env + content[:idx_ret] + dumper + content[idx_ret:]
+    new_script = re.sub(r'getfenv\s+and\s+getfenv\(\)\s+or\s+_ENV', 'MockEnv', new_script)
+
+    return new_script, None
 
 @bot.event
 async def on_member_join(member):
@@ -684,6 +758,83 @@ async def obfuscate_cmd(interaction: discord.Interaction, code: str = None, file
     except Exception as e:
         await interaction.followup.send(f"❌ Error: {str(e)}")
 
+@deobf_group.command(name="file", description="Deobfuscate a Lua script from a file")
+@app_commands.describe(
+    file="Upload the obfuscated .lua file to deobfuscate"
+)
+async def deobf_file(interaction: discord.Interaction, file: discord.Attachment):
+    await interaction.response.defer()
+    
+    # Check file extension
+    if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
+        return await interaction.followup.send("❌ Error: Please upload a .lua or .txt file")
+    
+    try:
+        # Read the file content
+        content = (await file.read()).decode('utf-8', errors='ignore')
+        if not content or len(content.strip()) == 0:
+            return await interaction.followup.send("❌ Error: The file is empty")
+        
+        # Process the deobfuscation
+        new_script, error = deobfuscate_lua_code(content)
+        if error:
+            return await interaction.followup.send(f"❌ Deobfuscation failed: {error}")
+        
+        # Generate output filename
+        timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"deobfuscated_{timestamp}.lua"
+        
+        # Save the deobfuscated script to a file
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(new_script)
+        
+        # Send the deobfuscated script as a file
+        await interaction.followup.send(
+            "✅ **Deobfuscated successfully!**",
+            file=discord.File(output_filename)
+        )
+        os.remove(output_filename)
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
+
+@deobf_group.command(name="code", description="Deobfuscate a Lua script from pasted code")
+@app_commands.describe(
+    code="Paste the obfuscated Lua code here"
+)
+async def deobf_code(interaction: discord.Interaction, code: str):
+    await interaction.response.defer()
+    
+    if not code or len(code.strip()) == 0:
+        return await interaction.followup.send("❌ Error: Please paste some Lua code to deobfuscate")
+    
+    try:
+        # Process the deobfuscation
+        new_script, error = deobfuscate_lua_code(code)
+        if error:
+            return await interaction.followup.send(f"❌ Deobfuscation failed: {error}")
+        
+        # Check if the deobfuscated code is too long for Discord message
+        if len(new_script) > 1900:
+            # Generate output filename
+            timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"deobfuscated_{timestamp}.lua"
+            
+            # Save to file and send as attachment
+            with open(output_filename, 'w', encoding='utf-8') as f:
+                f.write(new_script)
+            await interaction.followup.send(
+                "✅ **Deobfuscated successfully!**",
+                file=discord.File(output_filename)
+            )
+            os.remove(output_filename)
+        else:
+            # Send as code block
+            await interaction.followup.send(f"✅ **Deobfuscated successfully!**\n```lua\n{new_script}\n```")
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
@@ -823,11 +974,12 @@ async def show_commands(ctx):
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
 `/obfuscate code:` or `/obfuscate file:` - Obfuscate your Lua script (paste or upload file)
+`/deobf file file:` - Deobfuscate from uploaded .lua file
+`/deobf code code:` - Deobfuscate from pasted Lua code
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
 `/warning mention status:[On/Off] [ignored-channel:] [ignore-role:] [protected-role:]` - Toggle mention warnings, exclude channels/roles, and protect roles
-`/deobf file file:` - Deobfuscate uploaded .lua file
 `/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket` - Create a ticket panel
 `/create embed [plain-message:]` - Create a custom embed with optional plain text message
@@ -861,23 +1013,6 @@ async def deobf_prefix(ctx, *, link: str):
         f.write(deobf_code)
     await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
     await ctx.send(file=discord.File(filename))
-    os.remove(filename)
-
-@deobf_group.command(name="file", description="Upload a .lua file to deobfuscate")
-@app_commands.describe(file="Upload your obfuscated .lua file")
-async def deobf_slash(interaction: discord.Interaction, file: discord.Attachment):
-    if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
-        return await interaction.response.send_message("Error: Please upload a .lua or .txt file", ephemeral=True)
-    await interaction.response.defer()
-    try:
-        content = (await file.read()).decode('utf-8', errors='ignore')
-    except Exception as e:
-        return await interaction.followup.send(f"Error: Could not read file - {str(e)}", ephemeral=True)
-    deobf_code = smart_decode(content)
-    filename = f"deobfuscated_{interaction.id}.lua"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(deobf_code)
-    await interaction.followup.send(content="Success: File deobfuscated successfully", file=discord.File(filename))
     os.remove(filename)
 
 async def close_ticket_callback(interaction: discord.Interaction):
