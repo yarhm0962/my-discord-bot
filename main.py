@@ -570,9 +570,8 @@ async def obfuscate_cmd(interaction: discord.Interaction, code: str):
             encrypted.append(chr(ord(char) ^ ord(kc)))
         hex_data = ''.join(f'{ord(c):02x}' for c in encrypted)
 
-        # Build the Lua obfuscated code using string concatenation to avoid f-string issues
-        lua_template = '''--[[ M1rage Obfuscator ]]
-local _G = _G or {}
+        obfuscated = f'''--[[ M1rage Obfuscator ]]
+local _G = _G or {{}}
 local originalError = error
 local bxor=function(a,b)
 local r=0
@@ -594,9 +593,9 @@ r=r..string.char(bxor(h,b))
 end
 return r
 end
-local notifyTamper=function()originalError("⚠️ Tampering detected!")end
-local protectedStore={}
-setmetatable(_G,{
+local notifyTamper=function()originalError("Tampering detected!")end
+local protectedStore={{}}
+setmetatable(_G,{{
 __newindex=function(t,k,v)
 if protectedStore[k]then
 notifyTamper()
@@ -604,25 +603,22 @@ else
 rawset(t,k,v)
 end
 end,
-__metatable="🔒 Locked."
-})
-local ENC="'' + hex_data + ''"
-local KEY=key
+__metatable="This metatable is locked."
+}})
+local ENC="{hex_data}"
+local KEY={key}
 local OK,CODE=pcall(R,ENC,KEY)
-if OK then loadstring(CODE)()else error("❌ Decryption Failed!")end'''
+if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
 
-        # Insert the hex data and key properly
-        lua_code = lua_template.replace("'' + hex_data + ''", hex_data).replace("KEY=key", f"KEY={key}")
-
-        if len(lua_code) > 1900:
+        if len(obfuscated) > 1900:
             with open("obfuscated.lua", "w", encoding="utf-8") as f:
-                f.write(lua_code)
-            await interaction.followup.send(f"✅ **Obfuscated!** Key: `{key}`", file=discord.File("obfuscated.lua"))
+                f.write(obfuscated)
+            await interaction.followup.send(f"Obfuscated! Key: {key}", file=discord.File("obfuscated.lua"))
             os.remove("obfuscated.lua")
         else:
-            await interaction.followup.send(f"✅ **Obfuscated!** Key: `{key}`\n```lua\n{lua_code}\n```")
+            await interaction.followup.send(f"Obfuscated! Key: {key}\n```lua\n{obfuscated}\n```")
     except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}")
+        await interaction.followup.send(f"Error: {str(e)}")
 
 @bot.event
 async def on_message(message):
