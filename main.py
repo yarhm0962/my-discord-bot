@@ -348,6 +348,8 @@ async def on_member_join(member):
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
         custom_id = interaction.data.get("custom_id", "")
+        
+        # Handle verify button
         if custom_id.startswith("verify_btn_"):
             try:
                 role_id = int(custom_id.split("_")[2])
@@ -364,234 +366,117 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
         
-        # Handle ticket creation button
-        elif custom_id == "create_ticket_btn":
+        # Handle Give Permissions button
+        elif custom_id.startswith("give_perms_"):
             try:
-                settings = TICKET_SETTINGS.get(interaction.channel.id)
-                if not settings:
-                    return await interaction.response.send_message(
-                        "❌ Error: Ticket panel is not configured properly. Please contact an admin.",
-                        ephemeral=True
+                # Extract the category ID and admin role ID from the custom_id
+                parts = custom_id.split("_")
+                category_id = int(parts[2])
+                admin_role_id = int(parts[3])
+                
+                category = interaction.guild.get_channel(category_id)
+                admin_role = interaction.guild.get_role(admin_role_id)
+                
+                if not category:
+                    return await interaction.response.send_message("❌ Error: The category no longer exists.", ephemeral=True)
+                
+                if not admin_role:
+                    return await interaction.response.send_message("❌ Error: The admin role no longer exists.", ephemeral=True)
+                
+                # Check if the user has administrator permission
+                if not interaction.user.guild_permissions.administrator:
+                    return await interaction.response.send_message("❌ Error: You need Administrator permission to grant permissions.", ephemeral=True)
+                
+                # Get the bot member
+                bot_member = interaction.guild.get_member(bot.user.id)
+                
+                # Grant the required permissions in the category
+                try:
+                    await category.set_permissions(
+                        bot_member,
+                        view_channel=True,
+                        send_messages=True,
+                        manage_channels=True,
+                        read_message_history=True,
+                        create_instant_invite=True
                     )
-                
-                guild = interaction.guild
-                ticket_category = guild.get_channel(settings.get("category_id"))
-                staff_role = guild.get_role(settings.get("admin_role_id"))
-                
-                # Check if category exists
-                if not ticket_category:
-                    return await interaction.response.send_message(
-                        "❌ Error: The ticket category was not found. It may have been deleted.\n"
-                        "Please ask an admin to recreate the ticket panel.",
-                        ephemeral=True
-                    )
-                
-                # Check if staff role exists
-                if not staff_role:
-                    return await interaction.response.send_message(
-                        "❌ Error: The staff role was not found. It may have been deleted.\n"
-                        "Please ask an admin to recreate the ticket panel.",
-                        ephemeral=True
-                    )
-                
-                # Check bot permissions for the category
-                bot_member = guild.get_member(bot.user.id)
-                category_perms = ticket_category.permissions_for(bot_member)
-                
-                if not category_perms.create_instant_invite:
-                    # Check if bot has the necessary permissions
-                    missing_perms = []
-                    if not category_perms.view_channel:
-                        missing_perms.append("View Channel")
-                    if not category_perms.send_messages:
-                        missing_perms.append("Send Messages")
-                    if not category_perms.manage_channels:
-                        missing_perms.append("Manage Channels")
-                    if not category_perms.read_message_history:
-                        missing_perms.append("Read Message History")
                     
-                    if missing_perms:
-                        embed = discord.Embed(
-                            title="❌ Permission Error",
-                            description="I don't have all the necessary permissions to create tickets in this category.",
-                            color=discord.Colour.red()
-                        )
-                        embed.add_field(
-                            name="Missing Permissions",
-                            value="\n".join(f"• {p}" for p in missing_perms),
-                            inline=False
-                        )
-                        embed.add_field(
-                            name="How to Fix",
-                            value="Please ask an admin to give the bot the following permissions:\n"
-                            "• Manage Channels\n"
-                            "• Send Messages\n"
-                            "• Read Message History\n"
-                            "• View Channel\n\n"
-                            "Also make sure my role is higher than the staff role in the hierarchy.",
-                            inline=False
-                        )
-                        return await interaction.response.send_message(embed=embed, ephemeral=True)
-                
-                # Check if user already has an open ticket
-                for ch_id, ch_data in list(TICKET_SETTINGS.items()):
-                    if isinstance(ch_data, dict) and ch_data.get("creator_id") == interaction.user.id:
-                        existing_channel = guild.get_channel(ch_id)
-                        if existing_channel:
-                            return await interaction.response.send_message(
-                                f"⚠️ You already have an open ticket: {existing_channel.mention}. Please close it before opening a new one.",
+                    # Also grant permissions to the admin role in the category
+                    await category.set_permissions(
+                        admin_role,
+                        view_channel=True,
+                        send_messages=True,
+                        read_message_history=True,
+                        create_instant_invite=True
+                    )
+                    
+                    # Try to move the bot role above the admin role
+                    try:
+                        bot_role = bot_member.top_role
+                        if bot_role.position <= admin_role.position:
+                            # We can't move roles via API, but we can inform the user
+                            await interaction.response.send_message(
+                                "⚠️ **Permissions Granted but Role Hierarchy Issue**\n\n"
+                                "I've given myself the necessary permissions, but my role is still below the staff role.\n\n"
+                                "**Please move my role above the staff role in:**\n"
+                                "Server Settings → Roles\n\n"
+                                "After moving my role, click the button again to create the ticket panel.",
                                 ephemeral=True
                             )
-                
-                # Check if bot's role is higher than staff role
-                bot_top_role = bot_member.top_role
-                if staff_role.position >= bot_top_role.position:
+                            return
+                    except:
+                        pass
+                    
+                    # Create the ticket panel after permissions are granted
+                    await interaction.response.defer(ephemeral=True)
+                    
+                    # Create the ticket panel
+                    panel_description = "**CREATE A TICKET BELOW 🎟️**"
+                    embed_color = discord.Colour.green()
+                    
+                    TICKET_SETTINGS[interaction.channel.id] = {
+                        "admin_role_id": admin_role_id,
+                        "category_id": category_id,
+                        "guild_id": interaction.guild.id,
+                        "enable_claim_button": True
+                    }
+                    
+                    panel_view = discord.ui.View(timeout=None)
+                    create_btn = discord.ui.Button(
+                        label="Create Ticket",
+                        emoji="🎟️",
+                        style=discord.ButtonStyle.success,
+                        custom_id="create_ticket_btn"
+                    )
+                    panel_view.add_item(create_btn)
+                    
                     embed = discord.Embed(
-                        title="❌ Role Hierarchy Error",
-                        description="I cannot manage this ticket because my role is lower than or equal to the staff role.",
-                        color=discord.Colour.red()
+                        description=panel_description,
+                        color=embed_color
                     )
-                    embed.add_field(
-                        name="How to Fix",
-                        value=f"Please ask an admin to move my role **({bot_top_role.mention})** above the staff role **({staff_role.mention})** in the server's role hierarchy.",
-                        inline=False
+                    embed.set_footer(text="Ticket System")
+                    
+                    await interaction.channel.send(embed=embed, view=panel_view)
+                    
+                    await interaction.followup.send(
+                        "✅ **Permissions Granted!** Ticket panel has been created successfully.",
+                        ephemeral=True
                     )
-                    return await interaction.response.send_message(embed=embed, ephemeral=True)
-                
-                # Create the ticket channel
-                channel_name = f"{interaction.user.name}-ticket"
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                    interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                    staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-                }
-                
-                try:
-                    ticket_channel = await ticket_category.create_text_channel(
-                        name=channel_name,
-                        overwrites=overwrites,
-                        reason=f"Ticket created by {interaction.user}"
-                    )
+                    
                 except discord.Forbidden:
-                    return await interaction.response.send_message(
-                        "❌ Error: I don't have permission to create channels in that category. Please check my permissions.",
+                    await interaction.response.send_message(
+                        "❌ Error: I don't have permission to manage channels. Please manually give me the necessary permissions.",
                         ephemeral=True
                     )
                 except Exception as e:
-                    return await interaction.response.send_message(
-                        f"❌ Error creating ticket channel: {str(e)}",
+                    await interaction.response.send_message(
+                        f"❌ Error granting permissions: {str(e)}",
                         ephemeral=True
                     )
-                
-                # Store ticket information
-                TICKET_SETTINGS[ticket_channel.id] = {
-                    "admin_role_id": settings.get("admin_role_id"),
-                    "creator_id": interaction.user.id,
-                    "category_id": settings.get("category_id"),
-                    "enable_claim_button": settings.get("enable_claim_button")
-                }
-                
-                # Create the ticket embed
-                ticket_embed = discord.Embed(
-                    title="🎫 Ticket Created",
-                    description="**Please wait for a staff member to assist you**",
-                    color=discord.Colour.green()
-                )
-                ticket_embed.add_field(name="Created By", value=interaction.user.mention, inline=False)
-                ticket_embed.set_footer(text="Ticket System")
-                ticket_embed.timestamp = discord.utils.utcnow()
-                
-                # Build the actions view
-                view = discord.ui.View(timeout=None)
-                
-                # Close button
-                close_btn = discord.ui.Button(
-                    label="Close Ticket",
-                    emoji="🔒",
-                    style=discord.ButtonStyle.danger,
-                    custom_id="close_ticket_btn"
-                )
-                close_btn.callback = close_ticket_callback
-                view.add_item(close_btn)
-                
-                # Claim button if enabled
-                if settings.get("enable_claim_button", True):
-                    claim_btn = discord.ui.Button(
-                        label="Claim Ticket",
-                        emoji="🎫",
-                        style=discord.ButtonStyle.primary,
-                        custom_id="claim_ticket_btn"
-                    )
                     
-                    async def claim_callback(claim_interaction):
-                        try:
-                            claim_settings = TICKET_SETTINGS.get(claim_interaction.channel.id)
-                            if not claim_settings:
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: This ticket is not configured properly.",
-                                    ephemeral=True
-                                )
-                            
-                            claim_staff_role = claim_interaction.guild.get_role(claim_settings["admin_role_id"])
-                            is_staff = claim_staff_role in claim_interaction.user.roles if claim_staff_role else False
-                            
-                            if not (is_staff or claim_interaction.user.guild_permissions.administrator):
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: Only an admin/staff member can claim this ticket.",
-                                    ephemeral=True
-                                )
-                            
-                            if claim_btn.disabled:
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: This ticket has already been claimed.",
-                                    ephemeral=True
-                                )
-
-                            creator_id = claim_settings.get("creator_id")
-                            creator_mention = f"<@{creator_id}>" if creator_id else ""
-                            
-                            claim_embed = discord.Embed(
-                                title="🎫 Ticket Claimed",
-                                description=f"{claim_interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
-                                color=discord.Colour.yellow()
-                            )
-                            
-                            claim_btn.disabled = True
-                            claim_btn.label = f"Claimed by {claim_interaction.user.display_name}"
-                            
-                            await claim_interaction.response.edit_message(view=claim_btn.view)
-                            await claim_interaction.channel.send(content=creator_mention, embed=claim_embed)
-                            
-                        except Exception as e:
-                            await claim_interaction.response.send_message(
-                                f"❌ Error claiming ticket: {str(e)}",
-                                ephemeral=True
-                            )
-                    
-                    claim_btn.callback = claim_callback
-                    view.add_item(claim_btn)
-                
-                # Send the ticket embed with action buttons
-                await ticket_channel.send(embed=ticket_embed, view=view)
-                
-                # Send a mention to staff
-                await ticket_channel.send(f"{staff_role.mention} A new ticket has been created!")
-                
-                await interaction.response.send_message(
-                    f"✅ Ticket created successfully! → {ticket_channel.mention}",
-                    ephemeral=True
-                )
-                
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "❌ Error: I don't have permission to perform this action. Please check my permissions.",
-                    ephemeral=True
-                )
             except Exception as e:
-                print(f"Ticket creation error: {e}")
                 await interaction.response.send_message(
-                    f"❌ An error occurred while creating the ticket: {str(e)}",
+                    f"❌ An error occurred: {str(e)}",
                     ephemeral=True
                 )
 
@@ -935,44 +820,69 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     if not category_perms.create_instant_invite:
         missing_perms.append("Create Instant Invite")
     
-    if missing_perms:
-        embed = discord.Embed(
-            title="❌ Missing Permissions",
-            description="I don't have all the necessary permissions in the category to create tickets.",
-            color=discord.Colour.red()
-        )
-        embed.add_field(
-            name="Missing Permissions",
-            value="\n".join(f"• {p}" for p in missing_perms),
-            inline=False
-        )
-        embed.add_field(
-            name="How to Fix",
-            value="Please give the bot the following permissions in the category:\n"
-            "• Manage Channels\n"
-            "• Send Messages\n"
-            "• Read Message History\n"
-            "• View Channel\n"
-            "• Create Instant Invite",
-            inline=False
-        )
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
-    
     # Check if bot's role is higher than admin role
     bot_top_role = bot_member.top_role
-    if admin_role.position >= bot_top_role.position:
+    role_hierarchy_issue = admin_role.position >= bot_top_role.position
+    
+    # If there are missing permissions or role hierarchy issue, show the fix button
+    if missing_perms or role_hierarchy_issue:
         embed = discord.Embed(
-            title="❌ Role Hierarchy Error",
-            description="I cannot manage tickets because my role is lower than or equal to the admin role.",
+            title="❌ Permission Error",
+            description="I don't have all the necessary permissions to create tickets.",
             color=discord.Colour.red()
         )
+        
+        if missing_perms:
+            embed.add_field(
+                name="📌 Missing Permissions",
+                value="\n".join(f"• {p}" for p in missing_perms),
+                inline=False
+            )
+        
+        if role_hierarchy_issue:
+            embed.add_field(
+                name="📌 Role Hierarchy Issue",
+                value=f"My role **({bot_top_role.mention})** needs to be above the staff role **({admin_role.mention})**.",
+                inline=False
+            )
+        
         embed.add_field(
-            name="How to Fix",
-            value=f"Please move my role **({bot_top_role.mention})** above the admin role **({admin_role.mention})** in the server's role hierarchy.",
+            name="💡 Click the button below to auto-fix these issues",
+            value="This will grant me the needed permissions in the category.",
             inline=False
         )
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Create the view with the "Give Permissions" button
+        view = discord.ui.View(timeout=None)
+        give_perms_btn = discord.ui.Button(
+            label="Give Permissions",
+            emoji="🔑",
+            style=discord.ButtonStyle.success,
+            custom_id=f"give_perms_{category.id}_{admin_role.id}"
+        )
+        view.add_item(give_perms_btn)
+        
+        # Also add a cancel button
+        cancel_btn = discord.ui.Button(
+            label="Cancel",
+            emoji="❌",
+            style=discord.ButtonStyle.secondary,
+            custom_id="cancel_ticket_setup"
+        )
+        
+        async def cancel_callback(cancel_interaction):
+            await cancel_interaction.response.send_message(
+                "❌ Ticket setup cancelled.",
+                ephemeral=True
+            )
+        
+        cancel_btn.callback = cancel_callback
+        view.add_item(cancel_btn)
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        return
     
+    # If all permissions are good, create the ticket panel directly
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
     
