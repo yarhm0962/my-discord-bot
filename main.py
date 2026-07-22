@@ -8,6 +8,7 @@ import asyncio
 import discord
 import random
 import json
+import subprocess
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -255,79 +256,79 @@ async def schedule_auto_purge(channel_id):
     except Exception:
         pass
 
-def obfuscate_lua_code(code):
-    """Obfuscate Lua code and return the obfuscated code and key"""
-    key = random.randint(100000, 999999)
-    key_str = str(key)
-    encrypted = []
-    for i, char in enumerate(code):
-        kc = key_str[i % len(key_str)]
-        encrypted.append(chr(ord(char) ^ ord(kc)))
-    hex_data = ''.join(f'{ord(c):02x}' for c in encrypted)
-
-    obfuscated = f'''--[[ M1rage Obfuscator ]]
-local _G = _G or {{}}
-local originalError = error
-local bxor=function(a,b)
-local r=0
-for i=0,30 do
-local p=2^i
-if (a>=p or b>=p) then r=r+p end
-if (a>=p) then a=a-p end
-if (b>=p) then b=b-p end
-end
-return r
-end
-local R=function(s,k)
-local r=""
-k=tostring(k)
-for i=1,#s,2 do
-local h=tonumber("0x"..s:sub(i,i+1))
-local b=string.byte(k,(((i-1)//2)%#k)+1)
-r=r..string.char(bxor(h,b))
-end
-return r
-end
-local notifyTamper=function()originalError("Tampering detected!")end
-local protectedStore={{}}
-setmetatable(_G,{{
-__newindex=function(t,k,v)
-if protectedStore[k]then
-notifyTamper()
-else
-rawset(t,k,v)
-end
-end,
-__metatable="This metatable is locked."
-}})
-local ENC="{hex_data}"
-local KEY={key}
-local OK,CODE=pcall(R,ENC,KEY)
-if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
-    return obfuscated, key
-
 def deobfuscate_lua_code(content):
-    """Deobfuscate Lua code using string manipulation"""
+    """Deobfuscate Lua code using the Lua interpreter"""
+    # Find the string table variable
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
         return None, "String table not found"
     var_name = match.group(1)
 
-    table_pattern = r'local ' + var_name + r'=\{"([^}]*)\"}'
-    table_match = re.search(table_pattern, content, re.DOTALL)
-    
-    result = []
-    result.append("-- Deobfuscated Code --\n")
-    result.append("-- Original script structure preserved --\n\n")
-    
-    lines = content.split('\n')
-    for line in lines:
-        if 'loadstring' in line.lower() or 'pcall' in line.lower():
-            result.append("-- " + line)
-        else:
-            result.append(line)
-    
-    return '\n'.join(result), None
+    mock_env = """
+local real_type = type
+local real_concat = table.concat
+local MockEnv = {}
+local function create_dummy(name)
+    local d = {}
+    setmetatable(d, {
+        __index = function(_,k)
+            print("[ACCESSED] "..name.."."..k)
+            return create_dummy(name.."."..k)
+        end,
+        __call = function(_,...)
+            return create_dummy(name.."_res")
+        end
+    })
+    return d
+end
+local safe = {
+    string = string,
+    table = {concat = table.concat, insert = table.insert, remove = table.remove},
+    math = math,
+    pairs = pairs,
+    ipairs = ipairs,
+    tonumber = tonumber,
+    tostring = tostring,
+    type = type,
+    pcall = pcall,
+    setmetatable = setmetatable,
+    getmetatable = getmetatable,
+    next = next
+}
+safe.loadstring = function(s)
+    print("--- DEOBFUSCATED CODE ---")
+    print(s)
+    print("--- END ---")
+    return function() end
+end
+setmetatable(MockEnv, {
+    __index = function(_,k)
+        if safe[k] then return safe[k] end
+        if k == "game" or k == "workspace" or k == "script" then
+            return create_dummy(k)
+        end
+        return nil
+    end
+})
+"""
+
+    idx_ret = content.rfind("return(function")
+    if idx_ret == -1:
+        return None, "Injection point not found"
+
+    dumper = f"""
+print("--- STRING TABLE ---")
+if {var_name} then
+    for k,v in pairs({var_name}) do
+        print("["..k.."] = "..string.format("%q", v))
+    end
+end
+"""
+
+    new_script = mock_env + content[:idx_ret] + dumper + content[idx_ret:]
+    new_script = re.sub(r'getfenv\s+and\s+getfenv\(\)\s+or\s+_ENV', 'MockEnv', new_script)
+
+    return new_script, None
 
 @bot.event
 async def on_member_join(member):
@@ -657,58 +658,6 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="obfuscate", description="Obfuscate your Lua script")
-@app_commands.describe(
-    code="Optional: Paste your Lua code here",
-    file="Optional: Upload a .lua file to obfuscate"
-)
-async def obfuscate_cmd(interaction: discord.Interaction, code: str = None, file: discord.Attachment = None):
-    # Check if either code or file is provided
-    if code is None and file is None:
-        return await interaction.response.send_message("❌ Error: Please provide either `code:` or `file:`", ephemeral=True)
-    
-    # If both are provided, prioritize the file
-    if file is not None:
-        # Check file extension
-        if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
-            return await interaction.response.send_message("❌ Error: Please upload a .lua or .txt file", ephemeral=True)
-        
-        try:
-            # Read the file content
-            content = (await file.read()).decode('utf-8', errors='ignore')
-            if not content or len(content.strip()) == 0:
-                return await interaction.response.send_message("❌ Error: The file is empty", ephemeral=True)
-            code = content
-        except Exception as e:
-            return await interaction.response.send_message(f"❌ Error reading file: {str(e)}", ephemeral=True)
-    
-    await interaction.response.defer()
-    
-    try:
-        obfuscated, key = obfuscate_lua_code(code)
-        
-        # Generate output filename
-        timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"obfuscated_{timestamp}.lua"
-        
-        # Check if the obfuscated code is too long for Discord message
-        if len(obfuscated) > 1900:
-            # Save to file and send as attachment
-            with open(output_filename, 'w', encoding='utf-8') as f:
-                f.write(obfuscated)
-            await interaction.followup.send(
-                f"✅ **Obfuscated!** Key: `{key}`",
-                file=discord.File(output_filename)
-            )
-            os.remove(output_filename)
-        else:
-            # Send as code block
-            await interaction.followup.send(
-                f"✅ **Obfuscated!** Key: `{key}`\n```lua\n{obfuscated}\n```"
-            )
-    except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}")
-
 @deobf_group.command(name="file", description="Deobfuscate a Lua script from a file")
 @app_commands.describe(
     file="Upload the obfuscated .lua file to deobfuscate"
@@ -931,7 +880,6 @@ async def show_commands(ctx):
 **Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
-`/obfuscate code:` or `/obfuscate file:` - Obfuscate your Lua script (paste or upload file)
 `/deobf file file:` - Deobfuscate from uploaded .lua file
 `/deobf code code:` - Deobfuscate from pasted Lua code
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
