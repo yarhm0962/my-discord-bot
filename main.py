@@ -258,7 +258,6 @@ async def schedule_auto_purge(channel_id):
 
 def deobfuscate_lua_code(content):
     """Deobfuscate Lua code using the Lua interpreter"""
-    # Find the string table variable
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
         return None, "String table not found"
@@ -1098,13 +1097,31 @@ async def ban_user(interaction: discord.Interaction, user: discord.Member, reaso
         return await interaction.response.send_message("Error: You cannot ban a user with a higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot ban yourself", ephemeral=True)
+    
     ban_reason = reason if reason else "No reason provided"
     await interaction.guild.ban(user, reason=ban_reason)
+    
+    # Server embed
     embed = discord.Embed(title="🔨 User Banned", color=discord.Colour.red())
     embed.add_field(name="User", value=user.mention, inline=False)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
     embed.add_field(name="Reason", value=ban_reason, inline=False)
     await interaction.response.send_message(embed=embed)
+    
+    # DM the banned user
+    try:
+        dm_embed = discord.Embed(
+            title="🔨 You Have Been Banned",
+            description=f"You have been banned from **{interaction.guild.name}**",
+            color=discord.Colour.red()
+        )
+        dm_embed.add_field(name="Reason", value=ban_reason, inline=False)
+        dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+        dm_embed.timestamp = discord.utils.utcnow()
+        await user.send(embed=dm_embed)
+    except:
+        pass
 
 @tree.command(name="unban", description="Unban a user from the server")
 @app_commands.describe(user_id="Required: ID of the user to unban")
@@ -1118,10 +1135,27 @@ async def unban_user(interaction: discord.Interaction, user_id: str):
         for ban_entry in banned_users:
             if ban_entry.user.id == user_id:
                 await interaction.guild.unban(ban_entry.user)
+                
+                # Server embed
                 embed = discord.Embed(title="✅ User Unbanned", color=discord.Colour.green())
                 embed.add_field(name="User", value=ban_entry.user.mention, inline=False)
                 embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
-                return await interaction.response.send_message(embed=embed)
+                await interaction.response.send_message(embed=embed)
+                
+                # DM the unbanned user
+                try:
+                    dm_embed = discord.Embed(
+                        title="✅ You Have Been Unbanned",
+                        description=f"You have been unbanned from **{interaction.guild.name}**",
+                        color=discord.Colour.green()
+                    )
+                    dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+                    dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+                    dm_embed.timestamp = discord.utils.utcnow()
+                    await ban_entry.user.send(embed=dm_embed)
+                except:
+                    pass
+                return
         return await interaction.response.send_message("Error: User was not found in the ban list", ephemeral=True)
     except ValueError:
         return await interaction.response.send_message("Error: Invalid User ID", ephemeral=True)
@@ -1135,13 +1169,31 @@ async def kick_user(interaction: discord.Interaction, user: discord.Member, reas
         return await interaction.response.send_message("Error: You cannot kick a user with a higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot kick yourself", ephemeral=True)
+    
     kick_reason = reason if reason else "No reason provided"
     await interaction.guild.kick(user, reason=kick_reason)
+    
+    # Server embed
     embed = discord.Embed(title="👢 User Kicked", color=discord.Colour.orange())
     embed.add_field(name="User", value=user.mention, inline=False)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
     embed.add_field(name="Reason", value=kick_reason, inline=False)
     await interaction.response.send_message(embed=embed)
+    
+    # DM the kicked user
+    try:
+        dm_embed = discord.Embed(
+            title="👢 You Have Been Kicked",
+            description=f"You have been kicked from **{interaction.guild.name}**",
+            color=discord.Colour.orange()
+        )
+        dm_embed.add_field(name="Reason", value=kick_reason, inline=False)
+        dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+        dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+        dm_embed.timestamp = discord.utils.utcnow()
+        await user.send(embed=dm_embed)
+    except:
+        pass
 
 @tree.command(name="mute", description="Mute a user")
 @app_commands.describe(
@@ -1163,12 +1215,31 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
     if duration:
         try:
             await user.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=mute_reason)
+            
+            # Server embed
             embed = discord.Embed(title="🔇 User Timed Out", color=discord.Colour.orange())
             embed.add_field(name="User", value=user.mention, inline=False)
             embed.add_field(name="Duration", value=f"**{time}**", inline=False)
             embed.add_field(name="Reason", value=mute_reason, inline=False)
             embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
             await interaction.response.send_message(embed=embed)
+            
+            # DM the muted user
+            try:
+                dm_embed = discord.Embed(
+                    title="🔇 You Have Been Muted",
+                    description=f"You have been muted in **{interaction.guild.name}**",
+                    color=discord.Colour.red()
+                )
+                dm_embed.add_field(name="Duration", value=f"**{time}**", inline=False)
+                dm_embed.add_field(name="Reason", value=mute_reason, inline=False)
+                dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+                dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+                dm_embed.timestamp = discord.utils.utcnow()
+                await user.send(embed=dm_embed)
+            except:
+                pass
+                
         except Exception as e:
             return await interaction.response.send_message(f"Error: Could not time out user — {str(e)}", ephemeral=True)
     else:
@@ -1182,12 +1253,30 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
             return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
         
         await user.add_roles(mute_role, reason=mute_reason)
+        
+        # Server embed
         embed = discord.Embed(title="🔇 User Muted", color=discord.Colour.red())
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Duration", value="**Permanent**", inline=False)
         embed.add_field(name="Reason", value=mute_reason, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
+        
+        # DM the muted user
+        try:
+            dm_embed = discord.Embed(
+                title="🔇 You Have Been Muted",
+                description=f"You have been permanently muted in **{interaction.guild.name}**",
+                color=discord.Colour.red()
+            )
+            dm_embed.add_field(name="Duration", value="**Permanent**", inline=False)
+            dm_embed.add_field(name="Reason", value=mute_reason, inline=False)
+            dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+            dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+            dm_embed.timestamp = discord.utils.utcnow()
+            await user.send(embed=dm_embed)
+        except:
+            pass
 
 @tree.command(name="unmute", description="Unmute a user")
 @app_commands.describe(user="Required: User to unmute")
@@ -1203,15 +1292,46 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if mute_role and mute_role in user.roles:
         await user.remove_roles(mute_role)
+        
+        # Server embed
         embed = discord.Embed(title="🔊 User Unmuted", color=discord.Colour.green())
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
+        
+        # DM the unmuted user
+        try:
+            dm_embed = discord.Embed(
+                title="🔊 You Have Been Unmuted",
+                description=f"You have been unmuted in **{interaction.guild.name}**",
+                color=discord.Colour.green()
+            )
+            dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+            dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+            dm_embed.timestamp = discord.utils.utcnow()
+            await user.send(embed=dm_embed)
+        except:
+            pass
     else:
+        # Server embed for timeout removal
         embed = discord.Embed(title="🔊 Timeout Removed", color=discord.Colour.green())
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
+        
+        # DM the user
+        try:
+            dm_embed = discord.Embed(
+                title="🔊 Your Timeout Has Been Removed",
+                description=f"Your timeout has been removed in **{interaction.guild.name}**",
+                color=discord.Colour.green()
+            )
+            dm_embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
+            dm_embed.set_footer(text=f"Server: {interaction.guild.name}")
+            dm_embed.timestamp = discord.utils.utcnow()
+            await user.send(embed=dm_embed)
+        except:
+            pass
 
 @bot.event
 async def on_ready():
