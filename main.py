@@ -63,7 +63,6 @@ VERIFIED_ROLE_CACHE = {}
 WARNINGS_FILE = "warnings.json"
 
 def load_warnings():
-    """Load warnings from JSON file"""
     try:
         if os.path.exists(WARNINGS_FILE):
             with open(WARNINGS_FILE, 'r') as f:
@@ -74,7 +73,6 @@ def load_warnings():
     return {}
 
 def save_warnings(warnings):
-    """Save warnings to JSON file"""
     try:
         data = {str(g): {str(u): c for u, c in users.items()} for g, users in warnings.items()}
         with open(WARNINGS_FILE, 'w') as f:
@@ -82,7 +80,6 @@ def save_warnings(warnings):
     except Exception as e:
         print(f"Error saving warnings: {e}")
 
-# Load warnings at startup
 WARNINGS = load_warnings()
 
 def parse_time(time_str):
@@ -257,7 +254,6 @@ async def schedule_auto_purge(channel_id):
         pass
 
 def deobfuscate_lua_code(content):
-    """Deobfuscate Lua code using the Lua interpreter"""
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
         return None, "String table not found"
@@ -326,7 +322,6 @@ end
 
     new_script = mock_env + content[:idx_ret] + dumper + content[idx_ret:]
     new_script = re.sub(r'getfenv\s+and\s+getfenv\(\)\s+or\s+_ENV', 'MockEnv', new_script)
-
     return new_script, None
 
 @bot.event
@@ -348,8 +343,6 @@ async def on_member_join(member):
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
         custom_id = interaction.data.get("custom_id", "")
-        
-        # Handle verify button
         if custom_id.startswith("verify_btn_"):
             try:
                 role_id = int(custom_id.split("_")[2])
@@ -365,34 +358,21 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.send_message("❌ Error: I don't have permission to manage roles. Please ask an admin to move my bot role higher.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
-        
-        # Handle Give Permissions button
+
         elif custom_id.startswith("give_perms_"):
             try:
                 parts = custom_id.split("_")
                 category_id = int(parts[2])
                 admin_role_id = int(parts[3])
                 channel_id = int(parts[4]) if len(parts) > 4 else None
-                
                 category = interaction.guild.get_channel(category_id)
                 admin_role = interaction.guild.get_role(admin_role_id)
                 target_channel = interaction.guild.get_channel(channel_id) if channel_id else interaction.channel
-                
-                if not category:
-                    return await interaction.response.send_message("❌ Error: The category no longer exists.", ephemeral=True)
-                
-                if not admin_role:
-                    return await interaction.response.send_message("❌ Error: The admin role no longer exists.", ephemeral=True)
-                
-                if not target_channel:
-                    return await interaction.response.send_message("❌ Error: The target channel no longer exists.", ephemeral=True)
-                
+                if not category or not admin_role or not target_channel:
+                    return await interaction.response.send_message("❌ Error: Required resources not found.", ephemeral=True)
                 if not interaction.user.guild_permissions.administrator:
                     return await interaction.response.send_message("❌ Error: You need Administrator permission to grant permissions.", ephemeral=True)
-                
                 bot_member = interaction.guild.get_member(bot.user.id)
-                
-                # Grant permissions in the target channel
                 try:
                     await target_channel.set_permissions(
                         bot_member,
@@ -402,10 +382,8 @@ async def on_interaction(interaction: discord.Interaction):
                         manage_messages=True,
                         embed_links=True
                     )
-                except Exception as e:
+                except:
                     pass
-                
-                # Grant permissions in the category
                 try:
                     await category.set_permissions(
                         bot_member,
@@ -415,7 +393,6 @@ async def on_interaction(interaction: discord.Interaction):
                         read_message_history=True,
                         create_instant_invite=True
                     )
-                    
                     await category.set_permissions(
                         admin_role,
                         view_channel=True,
@@ -423,74 +400,22 @@ async def on_interaction(interaction: discord.Interaction):
                         read_message_history=True,
                         create_instant_invite=True
                     )
-                except Exception as e:
+                except:
                     pass
-                
                 # Check if permissions were granted
                 channel_perms = target_channel.permissions_for(bot_member)
-                channel_perms_granted = (
-                    channel_perms.view_channel and
-                    channel_perms.send_messages and
-                    channel_perms.read_message_history and
-                    channel_perms.manage_messages and
-                    channel_perms.embed_links
-                )
-                
                 category_perms = category.permissions_for(bot_member)
-                category_perms_granted = (
-                    category_perms.view_channel and
-                    category_perms.send_messages and
-                    category_perms.manage_channels and
-                    category_perms.read_message_history and
-                    category_perms.create_instant_invite
-                )
-                
-                if not channel_perms_granted or not category_perms_granted:
+                if not (channel_perms.view_channel and channel_perms.send_messages and channel_perms.read_message_history and channel_perms.manage_messages and channel_perms.embed_links) or not (category_perms.view_channel and category_perms.send_messages and category_perms.manage_channels and category_perms.read_message_history and category_perms.create_instant_invite):
                     embed = discord.Embed(
                         title="⚠️ Partial Permissions Granted",
                         description="I was unable to grant all the necessary permissions automatically.",
                         color=discord.Colour.orange()
                     )
-                    
-                    if not channel_perms_granted:
-                        embed.add_field(
-                            name="Channel Permissions",
-                            value=f"I still need permissions in {target_channel.mention}:\n"
-                                  "• View Channel\n"
-                                  "• Send Messages\n"
-                                  "• Read Message History\n"
-                                  "• Manage Messages\n"
-                                  "• Embed Links",
-                            inline=False
-                        )
-                    
-                    if not category_perms_granted:
-                        embed.add_field(
-                            name="Category Permissions",
-                            value=f"I still need permissions in the {category.name} category:\n"
-                                  "• View Channel\n"
-                                  "• Send Messages\n"
-                                  "• Manage Channels\n"
-                                  "• Read Message History\n"
-                                  "• Create Instant Invite",
-                            inline=False
-                        )
-                    
-                    embed.add_field(
-                        name="How to Fix",
-                        value="Please manually give me these permissions in the channel and category.",
-                        inline=False
-                    )
-                    
                     await interaction.response.send_message(embed=embed, ephemeral=True)
                     return
-                
-                # No role hierarchy check – proceed directly to panel creation
                 await interaction.response.defer(ephemeral=True)
-                
                 panel_description = "**CREATE A TICKET BELOW 🎟️**"
                 embed_color = discord.Colour.green()
-                
                 TICKET_SETTINGS[target_channel.id] = {
                     "admin_role_id": admin_role_id,
                     "category_id": category_id,
@@ -498,7 +423,6 @@ async def on_interaction(interaction: discord.Interaction):
                     "enable_claim_button": True,
                     "panel_channel_id": target_channel.id
                 }
-                
                 panel_view = discord.ui.View(timeout=None)
                 create_btn = discord.ui.Button(
                     label="Create Ticket",
@@ -507,73 +431,32 @@ async def on_interaction(interaction: discord.Interaction):
                     custom_id="create_ticket_btn"
                 )
                 panel_view.add_item(create_btn)
-                
-                embed = discord.Embed(
-                    description=panel_description,
-                    color=embed_color
-                )
+                embed = discord.Embed(description=panel_description, color=embed_color)
                 embed.set_footer(text="Ticket System")
-                
                 await target_channel.send(embed=embed, view=panel_view)
-                
-                await interaction.followup.send(
-                    f"✅ **Permissions Granted!** Ticket panel has been created in {target_channel.mention}.",
-                    ephemeral=True
-                )
-                
+                await interaction.followup.send(f"✅ **Permissions Granted!** Ticket panel has been created in {target_channel.mention}.", ephemeral=True)
             except Exception as e:
-                await interaction.response.send_message(
-                    f"❌ An error occurred: {str(e)}",
-                    ephemeral=True
-                )
-        
-        # Handle Create Ticket button
+                await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
         elif custom_id == "create_ticket_btn":
             try:
                 settings = TICKET_SETTINGS.get(interaction.channel.id)
                 if not settings:
-                    return await interaction.response.send_message(
-                        "❌ Error: Ticket panel is not configured properly. Please contact an admin.",
-                        ephemeral=True
-                    )
-                
+                    return await interaction.response.send_message("❌ Error: Ticket panel is not configured properly. Please contact an admin.", ephemeral=True)
                 guild = interaction.guild
                 ticket_category = guild.get_channel(settings["category_id"])
                 staff_role = guild.get_role(settings["admin_role_id"])
-                
-                if not ticket_category:
-                    return await interaction.response.send_message(
-                        "❌ Error: The ticket category was not found. It may have been deleted.",
-                        ephemeral=True
-                    )
-                
-                if not staff_role:
-                    return await interaction.response.send_message(
-                        "❌ Error: The staff role was not found. It may have been deleted.",
-                        ephemeral=True
-                    )
-                
-                # Check if user already has an open ticket
+                if not ticket_category or not staff_role:
+                    return await interaction.response.send_message("❌ Error: Category or staff role not found.", ephemeral=True)
                 for ch_id, ch_data in list(TICKET_SETTINGS.items()):
                     if isinstance(ch_data, dict) and ch_data.get("creator_id") == interaction.user.id:
                         existing_channel = guild.get_channel(ch_id)
                         if existing_channel:
-                            return await interaction.response.send_message(
-                                f"⚠️ You already have an open ticket: {existing_channel.mention}. Please close it before opening a new one.",
-                                ephemeral=True
-                            )
-                
-                # Check bot permissions in category
+                            return await interaction.response.send_message(f"⚠️ You already have an open ticket: {existing_channel.mention}. Please close it before opening a new one.", ephemeral=True)
                 bot_member = guild.get_member(bot.user.id)
                 category_perms = ticket_category.permissions_for(bot_member)
                 if not category_perms.view_channel or not category_perms.send_messages or not category_perms.manage_channels:
-                    return await interaction.response.send_message(
-                        "❌ Error: I don't have the necessary permissions in the category to create tickets. "
-                        "Please ask an admin to give me the required permissions.",
-                        ephemeral=True
-                    )
-                
-                # Create ticket channel
+                    return await interaction.response.send_message("❌ Error: I don't have the necessary permissions in the category to create tickets.", ephemeral=True)
                 channel_name = f"{interaction.user.name}-ticket"
                 overwrites = {
                     guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -581,22 +464,13 @@ async def on_interaction(interaction: discord.Interaction):
                     staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
                     guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                 }
-                
-                ticket_channel = await ticket_category.create_text_channel(
-                    name=channel_name,
-                    overwrites=overwrites,
-                    reason=f"Ticket created by {interaction.user}"
-                )
-                
-                # Store ticket info
+                ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites, reason=f"Ticket created by {interaction.user}")
                 TICKET_SETTINGS[ticket_channel.id] = {
                     "admin_role_id": settings["admin_role_id"],
                     "creator_id": interaction.user.id,
                     "category_id": settings["category_id"],
                     "enable_claim_button": settings.get("enable_claim_button", True)
                 }
-                
-                # Send ticket embed
                 ticket_embed = discord.Embed(
                     title="🎫 Ticket Created",
                     description="**Please wait for a staff member to assist you**",
@@ -605,10 +479,7 @@ async def on_interaction(interaction: discord.Interaction):
                 ticket_embed.add_field(name="Created By", value=interaction.user.mention, inline=False)
                 ticket_embed.set_footer(text="Ticket System")
                 ticket_embed.timestamp = discord.utils.utcnow()
-                
-                # Build actions view
                 view = discord.ui.View(timeout=None)
-                
                 close_btn = discord.ui.Button(
                     label="Close Ticket",
                     emoji="🔒",
@@ -617,7 +488,6 @@ async def on_interaction(interaction: discord.Interaction):
                 )
                 close_btn.callback = close_ticket_callback
                 view.add_item(close_btn)
-                
                 if settings.get("enable_claim_button", True):
                     claim_btn = discord.ui.Button(
                         label="Claim Ticket",
@@ -625,85 +495,46 @@ async def on_interaction(interaction: discord.Interaction):
                         style=discord.ButtonStyle.primary,
                         custom_id="claim_ticket_btn"
                     )
-                    
                     async def claim_callback(claim_interaction):
                         try:
                             claim_settings = TICKET_SETTINGS.get(claim_interaction.channel.id)
                             if not claim_settings:
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: This ticket is not configured properly.",
-                                    ephemeral=True
-                                )
-                            
+                                return await claim_interaction.response.send_message("❌ Error: This ticket is not configured properly.", ephemeral=True)
                             claim_staff_role = claim_interaction.guild.get_role(claim_settings["admin_role_id"])
                             is_staff = claim_staff_role in claim_interaction.user.roles if claim_staff_role else False
-                            
                             if not (is_staff or claim_interaction.user.guild_permissions.administrator):
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: Only an admin/staff member can claim this ticket.",
-                                    ephemeral=True
-                                )
-                            
+                                return await claim_interaction.response.send_message("❌ Error: Only an admin/staff member can claim this ticket.", ephemeral=True)
                             if claim_btn.disabled:
-                                return await claim_interaction.response.send_message(
-                                    "❌ Error: This ticket has already been claimed.",
-                                    ephemeral=True
-                                )
-                            
+                                return await claim_interaction.response.send_message("❌ Error: This ticket has already been claimed.", ephemeral=True)
                             creator_id = claim_settings.get("creator_id")
                             creator_mention = f"<@{creator_id}>" if creator_id else ""
-                            
                             claim_embed = discord.Embed(
                                 title="🎫 Ticket Claimed",
                                 description=f"{claim_interaction.user.mention} has claimed this ticket and will be assisting you shortly!",
                                 color=discord.Colour.yellow()
                             )
-                            
                             claim_btn.disabled = True
                             claim_btn.label = f"Claimed by {claim_interaction.user.display_name}"
-                            
                             await claim_interaction.response.edit_message(view=claim_btn.view)
                             await claim_interaction.channel.send(content=creator_mention, embed=claim_embed)
-                            
                         except Exception as e:
-                            await claim_interaction.response.send_message(
-                                f"❌ Error claiming ticket: {str(e)}",
-                                ephemeral=True
-                            )
-                    
+                            await claim_interaction.response.send_message(f"❌ Error claiming ticket: {str(e)}", ephemeral=True)
                     claim_btn.callback = claim_callback
                     view.add_item(claim_btn)
-                
                 await ticket_channel.send(embed=ticket_embed, view=view)
                 await ticket_channel.send(f"{staff_role.mention} A new ticket has been created!")
-                
-                await interaction.response.send_message(
-                    f"✅ Ticket created successfully! → {ticket_channel.mention}",
-                    ephemeral=True
-                )
-                
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "❌ Error: I don't have permission to create channels in that category. Please check my permissions.",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(f"✅ Ticket created successfully! → {ticket_channel.mention}", ephemeral=True)
             except Exception as e:
-                print(f"Ticket creation error: {e}")
-                await interaction.response.send_message(
-                    f"❌ An error occurred while creating the ticket: {str(e)}",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(f"❌ An error occurred while creating the ticket: {str(e)}", ephemeral=True)
 
 @instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
 async def instant_permissions(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Error: Administrator permission is required to use this command.", ephemeral=True)
-    
     await interaction.response.defer(ephemeral=True)
     everyone_role = interaction.guild.default_role
     updated_channels = 0
     failed_channels = []
-    
     for channel in interaction.guild.channels:
         try:
             if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.ForumChannel, discord.Thread)):
@@ -718,7 +549,6 @@ async def instant_permissions(interaction: discord.Interaction):
                 await asyncio.sleep(0.5)
         except Exception as e:
             failed_channels.append(f"{channel.name} ({str(e)})")
-    
     embed = discord.Embed(
         title="⚡ Instant Permissions Applied",
         description=f"Successfully disabled messaging permissions for **@everyone** in **{updated_channels}** channels.",
@@ -736,14 +566,12 @@ async def instant_permissions(interaction: discord.Interaction):
     )
     embed.set_footer(text=f"Action by {interaction.user.display_name}")
     embed.timestamp = discord.utils.utcnow()
-    
     if failed_channels:
         embed.add_field(
             name="⚠️ Failed Channels",
             value=f"Failed to update {len(failed_channels)} channels. They may be categories or the bot may lack permissions.",
             inline=False
         )
-    
     await interaction.followup.send(embed=embed)
 
 @add_group.command(name="verify", description="Set up a verification system and auto-role unverified members")
@@ -755,7 +583,6 @@ async def instant_permissions(interaction: discord.Interaction):
 async def add_verify(interaction: discord.Interaction, role: discord.Role, enabled_channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required.", ephemeral=True)
-
     await interaction.response.defer(ephemeral=True)
     VERIFIED_ROLE_CACHE[interaction.guild.id] = role
 
@@ -784,7 +611,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         pass
 
     semaphore = asyncio.Semaphore(5)
-    
     async def update_channel_permissions(ch):
         async with semaphore:
             try:
@@ -811,18 +637,15 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
                 await asyncio.sleep(0.3)
             except Exception:
                 pass
-    
     tasks = [update_channel_permissions(ch) for ch in interaction.guild.channels]
     await asyncio.gather(*tasks)
 
     assigned_count = 0
     failed_members = []
-    
     members_to_update = []
     for member in interaction.guild.members:
         if not member.bot and role not in member.roles and not_verified_role not in member.roles:
             members_to_update.append(member)
-    
     batch_size = 5
     for i in range(0, len(members_to_update), batch_size):
         batch = members_to_update[i:i + batch_size]
@@ -830,15 +653,12 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         for member in batch:
             task = member.add_roles(not_verified_role, reason="Auto-assigned 'Not Verified' role")
             tasks.append(task)
-        
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
         for result in results:
             if isinstance(result, Exception):
                 failed_members.append(str(result))
             else:
                 assigned_count += 1
-        
         if i + batch_size < len(members_to_update):
             await asyncio.sleep(1.0)
 
@@ -852,7 +672,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         color=discord.Colour.green()
     )
     embed.set_footer(text="Verification System")
-
     view = discord.ui.View(timeout=None)
     btn = discord.ui.Button(
         label="Click to Verify",
@@ -861,16 +680,13 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
         custom_id=f"verify_btn_{role.id}"
     )
     view.add_item(btn)
-
     await enabled_channel.send(embed=embed, view=view)
-    
     success_message = f"✅ Verification panel setup complete in {enabled_channel.mention}!\n"
     success_message += f"Gave the 'Not Verified' role to **{assigned_count}** members.\n"
     if failed_members:
         success_message += f"⚠️ Failed to assign role to {len(failed_members)} members.\n"
     success_message += f"*(Channel is now locked to Read-Only and other channels are hidden from unverified users).*\n\n"
     success_message += f"🔄 **New members will automatically receive the 'Not Verified' role upon joining!**"
-    
     await interaction.followup.send(success_message)
 
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
@@ -878,7 +694,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
 async def say_message(interaction: discord.Interaction, message: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to use this command.", ephemeral=True)
-    
     await interaction.response.send_message("Message sent successfully!", ephemeral=True)
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
@@ -899,7 +714,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
     global MENTION_WARNINGS_ENABLED
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Error: Administrator permission is required to change this setting.", ephemeral=True)
-    
     channel_msg = ""
     if ignored_channel:
         if ignored_channel.id in IGNORED_WARNING_CHANNELS:
@@ -908,7 +722,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
         else:
             IGNORED_WARNING_CHANNELS.add(ignored_channel.id)
             channel_msg = f"\n\n🚫 **Ignored Channel:** Mentions in {ignored_channel.mention} will be ignored."
-
     role_msg = ""
     if ignored_role:
         if ignored_role.id in IGNORED_WARNING_ROLES:
@@ -917,7 +730,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
         else:
             IGNORED_WARNING_ROLES.add(ignored_role.id)
             role_msg = f"\n\n🚫 **Ignored Role:** Members with the {ignored_role.mention} role will bypass warnings."
-
     protected_msg = ""
     if protected_role:
         if protected_role.id in PROTECTED_ROLES:
@@ -926,7 +738,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
         else:
             PROTECTED_ROLES.add(protected_role.id)
             protected_msg = f"\n\n🛡️ **Added Protected Role:** {protected_role.mention} will now trigger warnings when mentioned."
-
     if status.value == "on":
         MENTION_WARNINGS_ENABLED = True
         embed = discord.Embed(
@@ -941,7 +752,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
             description=f"Warnings for mentioning the highest role are now **OFF** globally.{channel_msg}{role_msg}{protected_msg}",
             color=discord.Colour.red()
         )
-    
     if PROTECTED_ROLES:
         role_list = []
         for role_id in PROTECTED_ROLES:
@@ -954,7 +764,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
                 value="\n".join(role_list),
                 inline=False
             )
-        
     await interaction.response.send_message(embed=embed)
 
 @auto_purge_group.command(name="messages", description="Auto purge a channel after a period of inactivity")
@@ -965,11 +774,9 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
 async def auto_purge_messages(interaction: discord.Interaction, channel: discord.TextChannel, time: str):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
-
     duration = parse_time(time)
     if not duration:
         return await interaction.response.send_message("Error: Invalid time format. Use formats like 1s, 1m, 1h, 1d", ephemeral=True)
-
     AUTO_PURGE_SETTINGS[channel.id] = {
         "duration": duration,
         "task": None,
@@ -977,7 +784,6 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
         "message_count": 0,
         "guild_id": interaction.guild.id
     }
-
     embed = discord.Embed(title="🧹 Auto Purge Enabled", color=discord.Colour.green())
     embed.add_field(name="Channel", value=channel.mention, inline=False)
     embed.add_field(name="Inactivity Duration", value=f"**{time}**", inline=False)
@@ -1009,21 +815,15 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
 async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, select_channel: discord.TextChannel, enable_claim_button: bool = True, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Error: Administrator permission is required", ephemeral=True)
-    
     if not category:
         return await interaction.response.send_message("❌ Error: The specified category does not exist.", ephemeral=True)
-    
     if not admin_role:
         return await interaction.response.send_message("❌ Error: The specified admin role does not exist.", ephemeral=True)
-    
     if not select_channel:
         return await interaction.response.send_message("❌ Error: The specified channel does not exist.", ephemeral=True)
-    
     target_channel = select_channel
-    
     bot_member = interaction.guild.get_member(bot.user.id)
     channel_perms = target_channel.permissions_for(bot_member)
-    
     channel_missing_perms = []
     if not channel_perms.view_channel:
         channel_missing_perms.append("View Channel")
@@ -1035,7 +835,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         channel_missing_perms.append("Manage Messages")
     if not channel_perms.embed_links:
         channel_missing_perms.append("Embed Links")
-    
     category_perms = category.permissions_for(bot_member)
     category_missing_perms = []
     if not category_perms.view_channel:
@@ -1048,35 +847,27 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         category_missing_perms.append("Read Message History")
     if not category_perms.create_instant_invite:
         category_missing_perms.append("Create Instant Invite")
-    
-    # Combine all missing permissions
     all_missing = []
     if channel_missing_perms:
         all_missing.append(f"**In {target_channel.mention}:**\n• " + "\n• ".join(channel_missing_perms))
     if category_missing_perms:
         all_missing.append(f"**In {category.name} category:**\n• " + "\n• ".join(category_missing_perms))
-    
-    # If there are missing permissions, show the fix button
     if all_missing:
         embed = discord.Embed(
             title="❌ Permission Error",
             description="I don't have all the necessary permissions to create tickets.",
             color=discord.Colour.red()
         )
-        
-        if all_missing:
-            embed.add_field(
-                name="📌 Missing Permissions",
-                value="\n\n".join(all_missing),
-                inline=False
-            )
-        
+        embed.add_field(
+            name="📌 Missing Permissions",
+            value="\n\n".join(all_missing),
+            inline=False
+        )
         embed.add_field(
             name="💡 Click the button below to auto-fix these issues",
             value="This will grant me the needed permissions in both the channel and category.",
             inline=False
         )
-        
         view = discord.ui.View(timeout=None)
         give_perms_btn = discord.ui.Button(
             label="Give Permissions",
@@ -1085,30 +876,20 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             custom_id=f"give_perms_{category.id}_{admin_role.id}_{target_channel.id}"
         )
         view.add_item(give_perms_btn)
-        
         cancel_btn = discord.ui.Button(
             label="Cancel",
             emoji="❌",
             style=discord.ButtonStyle.secondary,
             custom_id="cancel_ticket_setup"
         )
-        
         async def cancel_callback(cancel_interaction):
-            await cancel_interaction.response.send_message(
-                "❌ Ticket setup cancelled.",
-                ephemeral=True
-            )
-        
+            await cancel_interaction.response.send_message("❌ Ticket setup cancelled.", ephemeral=True)
         cancel_btn.callback = cancel_callback
         view.add_item(cancel_btn)
-        
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return
-    
-    # If all permissions are good, create the ticket panel directly
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
-    
     TICKET_SETTINGS[target_channel.id] = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
@@ -1116,7 +897,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         "enable_claim_button": enable_claim_button,
         "panel_channel_id": target_channel.id
     }
-
     panel_view = discord.ui.View(timeout=None)
     create_btn = discord.ui.Button(
         label=button_label,
@@ -1125,7 +905,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         custom_id="create_ticket_btn"
     )
     panel_view.add_item(create_btn)
-
     embed = discord.Embed(description=panel_description, color=embed_color)
     if title:
         embed.title = title
@@ -1133,9 +912,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         embed.set_footer(text=footer)
     if image:
         embed.set_image(url=image.url)
-    
     await target_channel.send(embed=embed, view=panel_view)
-    
     await interaction.response.send_message(
         f"✅ Ticket panel created successfully in {target_channel.mention}!",
         ephemeral=True
@@ -1147,31 +924,24 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
 )
 async def deobf_file(interaction: discord.Interaction, file: discord.Attachment):
     await interaction.response.defer()
-    
     if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
         return await interaction.followup.send("❌ Error: Please upload a .lua or .txt file")
-    
     try:
         content = (await file.read()).decode('utf-8', errors='ignore')
         if not content or len(content.strip()) == 0:
             return await interaction.followup.send("❌ Error: The file is empty")
-        
         new_script, error = deobfuscate_lua_code(content)
         if error:
             return await interaction.followup.send(f"❌ Deobfuscation failed: {error}")
-        
         timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
         output_filename = f"deobfuscated_{timestamp}.lua"
-        
         with open(output_filename, 'w', encoding='utf-8') as f:
             f.write(new_script)
-        
         await interaction.followup.send(
             "✅ **Deobfuscated successfully!**",
             file=discord.File(output_filename)
         )
         os.remove(output_filename)
-        
     except Exception as e:
         await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
 
@@ -1181,19 +951,15 @@ async def deobf_file(interaction: discord.Interaction, file: discord.Attachment)
 )
 async def deobf_code(interaction: discord.Interaction, code: str):
     await interaction.response.defer()
-    
     if not code or len(code.strip()) == 0:
         return await interaction.followup.send("❌ Error: Please paste some Lua code to deobfuscate")
-    
     try:
         new_script, error = deobfuscate_lua_code(code)
         if error:
             return await interaction.followup.send(f"❌ Deobfuscation failed: {error}")
-        
         if len(new_script) > 1900:
             timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
             output_filename = f"deobfuscated_{timestamp}.lua"
-            
             with open(output_filename, 'w', encoding='utf-8') as f:
                 f.write(new_script)
             await interaction.followup.send(
@@ -1203,7 +969,6 @@ async def deobf_code(interaction: discord.Interaction, code: str):
             os.remove(output_filename)
         else:
             await interaction.followup.send(f"✅ **Deobfuscated successfully!**\n```lua\n{new_script}\n```")
-        
     except Exception as e:
         await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
 
@@ -1211,30 +976,19 @@ async def close_ticket_callback(interaction: discord.Interaction):
     try:
         settings = TICKET_SETTINGS.get(interaction.channel.id)
         if not settings:
-            return await interaction.response.send_message(
-                "❌ Error: This ticket channel is not configured properly.",
-                ephemeral=True
-            )
-        
+            return await interaction.response.send_message("❌ Error: This ticket channel is not configured properly.", ephemeral=True)
         staff_role = interaction.guild.get_role(settings["admin_role_id"])
         is_staff = staff_role in interaction.user.roles if staff_role else False
-        
         if not (is_staff or interaction.user.guild_permissions.manage_channels):
-            return await interaction.response.send_message(
-                "❌ Error: You do not have permission to close this ticket.",
-                ephemeral=True
-            )
-        
+            return await interaction.response.send_message("❌ Error: You do not have permission to close this ticket.", ephemeral=True)
         await interaction.response.send_message("🔒 Closing ticket in 3 seconds...")
         await asyncio.sleep(3)
-        
         try:
             await interaction.channel.delete()
         except discord.Forbidden:
             await interaction.followup.send("❌ Error: I don't have permission to delete this channel.")
         except Exception as e:
             await interaction.followup.send(f"❌ Error deleting channel: {str(e)}")
-            
     except Exception as e:
         print(f"Close ticket error: {e}")
         await interaction.response.send_message(
@@ -1246,12 +1000,9 @@ async def close_ticket_callback(interaction: discord.Interaction):
 async def on_message(message):
     if message.author.bot:
         return
-    
     await bot.process_commands(message)
-    
     if not message.guild:
         return
-
     if message.channel.id in AUTO_PURGE_SETTINGS:
         settings = AUTO_PURGE_SETTINGS[message.channel.id]
         settings["message_count"] = settings.get("message_count", 0) + 1
@@ -1260,17 +1011,14 @@ async def on_message(message):
             if existing_task and not existing_task.done():
                 existing_task.cancel()
             settings["task"] = asyncio.create_task(schedule_auto_purge(message.channel.id))
-
     if PROTECTED_ROLES and message.channel.id not in IGNORED_WARNING_CHANNELS:
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
-        
         if not has_ignored_role:
             mentioned_protected = False
             for role_mention in message.role_mentions:
                 if role_mention.id in PROTECTED_ROLES:
                     mentioned_protected = True
                     break
-            
             if not mentioned_protected:
                 for user in message.mentions:
                     for role in user.roles:
@@ -1279,20 +1027,16 @@ async def on_message(message):
                             break
                     if mentioned_protected:
                         break
-            
             if mentioned_protected:
                 guild_id = message.guild.id
                 user_id = message.author.id
-                
                 if guild_id not in WARNINGS:
                     WARNINGS[guild_id] = {}
                 if user_id not in WARNINGS[guild_id]:
                     WARNINGS[guild_id][user_id] = 0
-                
                 WARNINGS[guild_id][user_id] += 1
                 count = WARNINGS[guild_id][user_id]
                 save_warnings(WARNINGS)
-                
                 if count == 1:
                     embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
                     embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning a protected role.\nPlease avoid doing this again."
@@ -1315,14 +1059,11 @@ async def on_message(message):
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
-
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
         has_ignored_role = any(role.id in IGNORED_WARNING_ROLES for role in message.author.roles)
         is_admin = message.author.guild_permissions.administrator
-        
         if not has_ignored_role and not is_admin:
             highest_role = max(message.guild.roles, key=lambda r: r.position)
-            
             mentioned_highest = False
             if highest_role in message.role_mentions:
                 mentioned_highest = True
@@ -1331,20 +1072,16 @@ async def on_message(message):
                     if highest_role in user.roles:
                         mentioned_highest = True
                         break
-            
             if mentioned_highest:
                 guild_id = message.guild.id
                 user_id = message.author.id
-                
                 if guild_id not in WARNINGS:
                     WARNINGS[guild_id] = {}
                 if user_id not in WARNINGS[guild_id]:
                     WARNINGS[guild_id][user_id] = 0
-                
                 WARNINGS[guild_id][user_id] += 1
                 count = WARNINGS[guild_id][user_id]
                 save_warnings(WARNINGS)
-                
                 if count == 1:
                     embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
                     embed.description = f"{message.author.mention}, you have received **Warning 1/3** for mentioning the highest role.\nPlease avoid doing this again."
@@ -1368,11 +1105,12 @@ async def on_message(message):
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
 
+# ---- FIXED .cmds COMMAND ----
 @bot.command(name='cmds')
 async def show_commands(ctx):
-    if ctx.author.bot: 
+    if ctx.author.bot:
         return
-    
+    print(f".cmds command triggered by {ctx.author}")  # Debug print
     embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
     embed.add_field(name="Prefix Commands", value="""
 `.d <link>` - Deobfuscate from URL
@@ -1400,8 +1138,10 @@ async def show_commands(ctx):
 `/unmute user:@User` - Unmute a user
 """, inline=False)
     embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-    
-    await ctx.send(embed=embed)
+    try:
+        await ctx.send(embed=embed)
+    except Exception as e:
+        print(f"Error sending .cmds response: {e}")
     try:
         await ctx.message.delete()
     except:
@@ -1409,24 +1149,20 @@ async def show_commands(ctx):
 
 @bot.command(name='d')
 async def deobf_prefix(ctx, *, link: str):
-    if ctx.author.bot: 
+    if ctx.author.bot:
         return
-    
     status_msg = await ctx.send("Processing...")
     url = extract_url(link)
     if not url:
         if "api.pastes.io" in link:
             return await status_msg.edit(content="Error: api.pastes.io does not exist! Use valid links like https://rentry.co/raw/XXX")
         return await status_msg.edit(content="Error: Could not find a valid URL or loadstring")
-    
     deobf_code, error = await deobfuscate_from_url(url)
     if error:
         return await status_msg.edit(content=f"Error: {error}")
-    
     filename = f"deobfuscated_{ctx.message.id}.lua"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(deobf_code)
-    
     await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
     await ctx.send(file=discord.File(filename))
     os.remove(filename)
@@ -1434,18 +1170,14 @@ async def deobf_prefix(ctx, *, link: str):
 @bot.command(name='purge')
 @commands.has_permissions(manage_messages=True)
 async def purge_messages(ctx, amount: int):
-    """Delete a specified number of messages instantly (max 1000)"""
     if amount < 1:
         await ctx.send("❌ Please specify a positive number.", delete_after=3)
         return
     if amount > 1000:
         await ctx.send("❌ Maximum purge limit is 1000 messages.", delete_after=3)
         return
-    
     try:
-        # +1 to include the command message
         deleted = await ctx.channel.purge(limit=amount + 1)
-        # Send confirmation and auto-delete after 5 seconds
         msg = await ctx.send(f"✅ Deleted {len(deleted)-1} messages.")
         await asyncio.sleep(5)
         await msg.delete()
@@ -1476,7 +1208,6 @@ async def purge_error(ctx, error):
 async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", plain_message: str = ""):
     if not interaction.user.guild_permissions.manage_messages:
         return await interaction.response.send_message("❌ Error: Missing permission — Manage Messages", ephemeral=True)
-    
     embed_color = get_color(color)
     embed = discord.Embed(description=description, color=embed_color)
     if title:
@@ -1485,12 +1216,8 @@ async def create_embed(interaction: discord.Interaction, description: str, title
         embed.set_footer(text=footer)
     if image:
         embed.set_image(url=image.url)
-    
     await interaction.response.send_message("✅ Embed sent successfully!", ephemeral=True)
-    
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
-    
-    # Send a single message with both content and embed
     await interaction.channel.send(content=plain_message if plain_message else None, embed=embed, allowed_mentions=allowed_mentions)
 
 @tree.command(name="ban", description="Ban a user from the server")
@@ -1502,16 +1229,13 @@ async def ban_user(interaction: discord.Interaction, user: discord.Member, reaso
         return await interaction.response.send_message("Error: You cannot ban a user with a higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot ban yourself", ephemeral=True)
-    
     ban_reason = reason if reason else "No reason provided"
     await interaction.guild.ban(user, reason=ban_reason)
-    
     embed = discord.Embed(title="🔨 User Banned", color=discord.Colour.red())
     embed.add_field(name="User", value=user.mention, inline=False)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
     embed.add_field(name="Reason", value=ban_reason, inline=False)
     await interaction.response.send_message(embed=embed)
-    
     try:
         dm_embed = discord.Embed(
             title="🔨 You Have Been Banned",
@@ -1538,12 +1262,10 @@ async def unban_user(interaction: discord.Interaction, user_id: str):
         for ban_entry in banned_users:
             if ban_entry.user.id == user_id:
                 await interaction.guild.unban(ban_entry.user)
-                
                 embed = discord.Embed(title="✅ User Unbanned", color=discord.Colour.green())
                 embed.add_field(name="User", value=ban_entry.user.mention, inline=False)
                 embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
                 await interaction.response.send_message(embed=embed)
-                
                 try:
                     dm_embed = discord.Embed(
                         title="✅ You Have Been Unbanned",
@@ -1570,16 +1292,13 @@ async def kick_user(interaction: discord.Interaction, user: discord.Member, reas
         return await interaction.response.send_message("Error: You cannot kick a user with a higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot kick yourself", ephemeral=True)
-    
     kick_reason = reason if reason else "No reason provided"
     await interaction.guild.kick(user, reason=kick_reason)
-    
     embed = discord.Embed(title="👢 User Kicked", color=discord.Colour.orange())
     embed.add_field(name="User", value=user.mention, inline=False)
     embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
     embed.add_field(name="Reason", value=kick_reason, inline=False)
     await interaction.response.send_message(embed=embed)
-    
     try:
         dm_embed = discord.Embed(
             title="👢 You Have Been Kicked",
@@ -1607,21 +1326,17 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
         return await interaction.response.send_message("Error: You cannot mute a user with a higher or equal role", ephemeral=True)
     if user == interaction.user:
         return await interaction.response.send_message("Error: You cannot mute yourself", ephemeral=True)
-    
     mute_reason = reason if reason else "No reason provided"
     duration = parse_time(time)
-    
     if duration:
         try:
             await user.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=mute_reason)
-            
             embed = discord.Embed(title="🔇 User Timed Out", color=discord.Colour.orange())
             embed.add_field(name="User", value=user.mention, inline=False)
             embed.add_field(name="Duration", value=f"**{time}**", inline=False)
             embed.add_field(name="Reason", value=mute_reason, inline=False)
             embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
             await interaction.response.send_message(embed=embed)
-            
             try:
                 dm_embed = discord.Embed(
                     title="🔇 You Have Been Muted",
@@ -1636,7 +1351,6 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
                 await user.send(embed=dm_embed)
             except:
                 pass
-                
         except Exception as e:
             return await interaction.response.send_message(f"Error: Could not time out user — {str(e)}", ephemeral=True)
     else:
@@ -1645,19 +1359,15 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
             mute_role = await interaction.guild.create_role(name="Muted")
             for channel in interaction.guild.channels:
                 await channel.set_permissions(mute_role, send_messages=False, speak=False)
-        
         if mute_role in user.roles:
             return await interaction.response.send_message("Error: User is already muted", ephemeral=True)
-        
         await user.add_roles(mute_role, reason=mute_reason)
-        
         embed = discord.Embed(title="🔇 User Muted", color=discord.Colour.red())
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Duration", value="**Permanent**", inline=False)
         embed.add_field(name="Reason", value=mute_reason, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
-        
         try:
             dm_embed = discord.Embed(
                 title="🔇 You Have Been Muted",
@@ -1678,21 +1388,17 @@ async def mute_user(interaction: discord.Interaction, user: discord.Member, time
 async def unmute_user(interaction: discord.Interaction, user: discord.Member):
     if not interaction.user.guild_permissions.manage_roles or not interaction.user.guild_permissions.moderate_members:
         return await interaction.response.send_message("Error: Missing permission — Manage Roles or Moderate Members", ephemeral=True)
-    
     try:
         await user.timeout(None)
     except:
         pass
-    
     mute_role = discord.utils.get(interaction.guild.roles, name="Muted")
     if mute_role and mute_role in user.roles:
         await user.remove_roles(mute_role)
-        
         embed = discord.Embed(title="🔊 User Unmuted", color=discord.Colour.green())
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
-        
         try:
             dm_embed = discord.Embed(
                 title="🔊 You Have Been Unmuted",
@@ -1710,7 +1416,6 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
         embed.add_field(name="User", value=user.mention, inline=False)
         embed.add_field(name="Moderator", value=interaction.user.mention, inline=False)
         await interaction.response.send_message(embed=embed)
-        
         try:
             dm_embed = discord.Embed(
                 title="🔊 Your Timeout Has Been Removed",
@@ -1728,8 +1433,10 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 async def on_ready():
     print(f"Logged in as {bot.user}")
     print(f"Loaded warnings for {len(WARNINGS)} guilds")
-    try: await tree.sync()
-    except Exception as e: print(f"Sync Error: {e}")
+    try:
+        await tree.sync()
+    except Exception as e:
+        print(f"Sync Error: {e}")
 
 if __name__ == "__main__":
     keep_alive()
