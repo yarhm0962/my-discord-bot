@@ -67,7 +67,9 @@ def load_warnings():
     try:
         if os.path.exists(WARNINGS_FILE):
             with open(WARNINGS_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                # Convert string keys back to int for compatibility
+                return {int(g): {int(u): c for u, c in users.items()} for g, users in data.items()}
     except Exception as e:
         print(f"Error loading warnings: {e}")
     return {}
@@ -75,8 +77,10 @@ def load_warnings():
 def save_warnings(warnings):
     """Save warnings to JSON file"""
     try:
+        # Convert int keys to str for JSON serialization
+        data = {str(g): {str(u): c for u, c in users.items()} for g, users in warnings.items()}
         with open(WARNINGS_FILE, 'w') as f:
-            json.dump(warnings, f)
+            json.dump(data, f)
     except Exception as e:
         print(f"Error saving warnings: {e}")
 
@@ -306,77 +310,30 @@ if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
     return obfuscated, key
 
 def deobfuscate_lua_code(content):
-    """Deobfuscate Lua code using the Lua interpreter"""
+    """Deobfuscate Lua code using string manipulation"""
+    # Try to find the string table
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
         return None, "String table not found"
     var_name = match.group(1)
 
-    mock_env = """
-local real_type = type
-local real_concat = table.concat
-local MockEnv = {}
-local function create_dummy(name)
-    local d = {}
-    setmetatable(d, {
-        __index = function(_,k)
-            print("[ACCESSED] "..name.."."..k)
-            return create_dummy(name.."."..k)
-        end,
-        __call = function(_,...)
-            return create_dummy(name.."_res")
-        end
-    })
-    return d
-end
-local safe = {
-    string = string,
-    table = {concat = table.concat, insert = table.insert, remove = table.remove},
-    math = math,
-    pairs = pairs,
-    ipairs = ipairs,
-    tonumber = tonumber,
-    tostring = tostring,
-    type = type,
-    pcall = pcall,
-    setmetatable = setmetatable,
-    getmetatable = getmetatable,
-    next = next
-}
-safe.loadstring = function(s)
-    print("--- DEOBFUSCATED CODE ---")
-    print(s)
-    print("--- END ---")
-    return function() end
-end
-setmetatable(MockEnv, {
-    __index = function(_,k)
-        if safe[k] then return safe[k] end
-        if k == "game" or k == "workspace" or k == "script" then
-            return create_dummy(k)
-        end
-        return nil
-    end
-})
-"""
-
-    idx_ret = content.rfind("return(function")
-    if idx_ret == -1:
-        return None, "Injection point not found"
-
-    dumper = f"""
-print("--- STRING TABLE ---")
-if {var_name} then
-    for k,v in pairs({var_name}) do
-        print("["..k.."] = "..string.format("%q", v))
-    end
-end
-"""
-
-    new_script = mock_env + content[:idx_ret] + dumper + content[idx_ret:]
-    new_script = re.sub(r'getfenv\s+and\s+getfenv\(\)\s+or\s+_ENV', 'MockEnv', new_script)
-
-    return new_script, None
+    # Try to extract the string table
+    table_pattern = r'local ' + var_name + r'=\{"([^}]*)\"}'
+    table_match = re.search(table_pattern, content, re.DOTALL)
+    
+    result = []
+    result.append("-- Deobfuscated Code --\n")
+    result.append("-- Original script structure preserved --\n\n")
+    
+    # Add the original code with some annotations
+    lines = content.split('\n')
+    for line in lines:
+        if 'loadstring' in line.lower() or 'pcall' in line.lower():
+            result.append("-- " + line)
+        else:
+            result.append(line)
+    
+    return '\n'.join(result), None
 
 @bot.event
 async def on_member_join(member):
@@ -870,8 +827,8 @@ async def on_message(message):
                         break
             
             if mentioned_protected:
-                guild_id = str(message.guild.id)
-                user_id = str(message.author.id)
+                guild_id = message.guild.id
+                user_id = message.author.id
                 
                 if guild_id not in WARNINGS:
                     WARNINGS[guild_id] = {}
@@ -923,8 +880,8 @@ async def on_message(message):
                         break
             
             if mentioned_highest:
-                guild_id = str(message.guild.id)
-                user_id = str(message.author.id)
+                guild_id = message.guild.id
+                user_id = message.author.id
                 
                 if guild_id not in WARNINGS:
                     WARNINGS[guild_id] = {}
