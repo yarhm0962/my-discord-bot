@@ -1105,42 +1105,68 @@ async def on_message(message):
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
 
-# ---- FIXED .cmds COMMAND (NO EMBED REQUIRED) ----
+# ---- FIXED .cmds COMMAND (EMBED WITH FALLBACK) ----
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot:
         return
     print(f".cmds triggered by {ctx.author}")  # debug
 
-    # Build a nicely formatted text message (no embed required)
-    message = (
-        "**📋 Bot Commands**\n\n"
-        "**Prefix Commands**\n"
-        "`.d <link>` – Deobfuscate from URL\n"
-        "`.cmds` – Show this command list\n"
-        "`.purge <amount>` – Delete messages (max 1000)\n\n"
-        "**Auto‑Features**\n"
-        "• **Mention Protection** – Auto‑warns & times out NON‑ADMIN users who mention the highest role 3 times\n"
-        "• **Protected Roles** – Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned\n\n"
-        "**Slash Commands**\n"
-        "`/deobf file:` – Deobfuscate from uploaded `.lua` file\n"
-        "`/deobf code:` – Deobfuscate from pasted Lua code\n"
-        "`/instant permissions` – Instantly disable @everyone messaging in ALL channels\n"
-        "`/add verify` – Set up verification system\n"
-        "`/say` – Send a custom message with mentions\n"
-        "`/warning mention` – Toggle mention warnings, exclude channels/roles, protect roles\n"
-        "`/auto purge messages` – Auto‑purge a channel after inactivity\n"
-        "`/create ticket` – Create a ticket panel\n"
-        "`/create embed` – Create a custom embed with optional plain text message\n"
-        "`/ban` – Ban a user\n"
-        "`/unban` – Unban a user by ID\n"
-        "`/kick` – Kick a user\n"
-        "`/mute` – Mute a user with duration\n"
-        "`/unmute` – Unmute a user"
+    # Build the embed
+    embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
+    embed.add_field(
+        name="Prefix Commands",
+        value="`.d <link>` – Deobfuscate from URL\n"
+              "`.cmds` – Show this command list\n"
+              "`.purge <amount>` – Delete messages (max 1000)",
+        inline=False
     )
+    embed.add_field(
+        name="Auto‑Features",
+        value="• **Mention Protection** – Auto‑warns & times out NON‑ADMIN users who mention the highest role 3 times\n"
+              "• **Protected Roles** – Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned",
+        inline=False
+    )
+    embed.add_field(
+        name="Slash Commands",
+        value="`/deobf file:` – Deobfuscate from uploaded `.lua` file\n"
+              "`/deobf code:` – Deobfuscate from pasted Lua code\n"
+              "`/instant permissions` – Instantly disable @everyone messaging in ALL channels\n"
+              "`/add verify` – Set up verification system\n"
+              "`/say` – Send a custom message with mentions\n"
+              "`/warning mention` – Toggle mention warnings, exclude channels/roles, protect roles\n"
+              "`/auto purge messages` – Auto‑purge a channel after inactivity\n"
+              "`/create ticket` – Create a ticket panel\n"
+              "`/create embed` – Create a custom embed with optional plain text message\n"
+              "`/ban` – Ban a user\n"
+              "`/unban` – Unban a user by ID\n"
+              "`/kick` – Kick a user\n"
+              "`/mute` – Mute a user with duration\n"
+              "`/unmute` – Unmute a user",
+        inline=False
+    )
+    embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
 
-    # Send the text message (works without Embed Links permission)
-    await ctx.send(message)
+    # Try to send the embed; fall back to plain text if Embed Links is missing
+    try:
+        await ctx.send(embed=embed)
+    except discord.Forbidden:
+        # Fallback plain text (no embed)
+        plain = (
+            "**📋 Bot Commands**\n\n"
+            "**Prefix Commands**\n"
+            "`.d <link>` – Deobfuscate from URL\n"
+            "`.cmds` – Show this command list\n"
+            "`.purge <amount>` – Delete messages (max 1000)\n\n"
+            "**Auto‑Features**\n"
+            "• Mention Protection – warns & times out non‑admins\n"
+            "• Protected Roles – warns everyone when mentioned\n\n"
+            "**Slash Commands**\n"
+            "`/deobf file/code`, `/instant permissions`, `/add verify`, `/say`,\n"
+            "`/warning mention`, `/auto purge messages`, `/create ticket`, `/create embed`,\n"
+            "`/ban`, `/unban`, `/kick`, `/mute`, `/unmute`"
+        )
+        await ctx.send(plain)
 
     # Delete the command message if possible
     try:
