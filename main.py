@@ -1377,6 +1377,7 @@ async def show_commands(ctx):
     embed.add_field(name="Prefix Commands", value="""
 `.d <link>` - Deobfuscate from URL
 `.cmds` - Show this command list
+`.purge <amount>` - Delete a specified number of messages (max 1000) instantly
 """, inline=False)
     embed.add_field(name="Auto-Features", value="""
 **Mention Protection** - Auto-warns & times out NON-ADMIN users who mention the highest role 3 times
@@ -1429,6 +1430,38 @@ async def deobf_prefix(ctx, *, link: str):
     await status_msg.edit(content="Success: Loadstring deobfuscated successfully")
     await ctx.send(file=discord.File(filename))
     os.remove(filename)
+
+@bot.command(name='purge')
+@commands.has_permissions(manage_messages=True)
+async def purge_messages(ctx, amount: int):
+    """Delete a specified number of messages instantly (max 1000)"""
+    if amount < 1:
+        await ctx.send("❌ Please specify a positive number.", delete_after=3)
+        return
+    if amount > 1000:
+        await ctx.send("❌ Maximum purge limit is 1000 messages.", delete_after=3)
+        return
+    
+    try:
+        # +1 to include the command message
+        deleted = await ctx.channel.purge(limit=amount + 1)
+        # Send confirmation and auto-delete after 5 seconds
+        msg = await ctx.send(f"✅ Deleted {len(deleted)-1} messages.")
+        await asyncio.sleep(5)
+        await msg.delete()
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to manage messages.", delete_after=3)
+    except Exception as e:
+        await ctx.send(f"❌ An error occurred: {str(e)}", delete_after=5)
+
+@purge_messages.error
+async def purge_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need the **Manage Messages** permission to use this command.", delete_after=3)
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Please provide a valid number of messages to delete.\nUsage: `.purge <amount>`", delete_after=5)
+    else:
+        await ctx.send(f"❌ An error occurred: {str(error)}", delete_after=5)
 
 @create_group.command(name="embed", description="Create a custom embed with an optional plain text message (both in one message)")
 @app_commands.describe(
