@@ -426,7 +426,7 @@ async def on_interaction(interaction: discord.Interaction):
                 except Exception as e:
                     pass
                 
-                # Check permissions
+                # Check if permissions were granted
                 channel_perms = target_channel.permissions_for(bot_member)
                 channel_perms_granted = (
                     channel_perms.view_channel and
@@ -485,20 +485,7 @@ async def on_interaction(interaction: discord.Interaction):
                     await interaction.response.send_message(embed=embed, ephemeral=True)
                     return
                 
-                # Check role hierarchy
-                bot_role = bot_member.top_role
-                if bot_role.position <= admin_role.position:
-                    await interaction.response.send_message(
-                        "⚠️ **Permissions Granted but Role Hierarchy Issue**\n\n"
-                        "I've given myself the necessary permissions, but my role is still below the staff role.\n\n"
-                        "**Please move my role above the staff role in:**\n"
-                        "Server Settings → Roles\n\n"
-                        "After moving my role, click the button again to create the ticket panel.",
-                        ephemeral=True
-                    )
-                    return
-                
-                # Create the ticket panel
+                # No role hierarchy check – proceed directly to panel creation
                 await interaction.response.defer(ephemeral=True)
                 
                 panel_description = "**CREATE A TICKET BELOW 🎟️**"
@@ -1062,16 +1049,15 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     if not category_perms.create_instant_invite:
         category_missing_perms.append("Create Instant Invite")
     
-    bot_top_role = bot_member.top_role
-    role_hierarchy_issue = admin_role.position >= bot_top_role.position
-    
+    # Combine all missing permissions
     all_missing = []
     if channel_missing_perms:
         all_missing.append(f"**In {target_channel.mention}:**\n• " + "\n• ".join(channel_missing_perms))
     if category_missing_perms:
         all_missing.append(f"**In {category.name} category:**\n• " + "\n• ".join(category_missing_perms))
     
-    if all_missing or role_hierarchy_issue:
+    # If there are missing permissions, show the fix button (role hierarchy is ignored)
+    if all_missing:
         embed = discord.Embed(
             title="❌ Permission Error",
             description="I don't have all the necessary permissions to create tickets.",
@@ -1082,13 +1068,6 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
             embed.add_field(
                 name="📌 Missing Permissions",
                 value="\n\n".join(all_missing),
-                inline=False
-            )
-        
-        if role_hierarchy_issue:
-            embed.add_field(
-                name="📌 Role Hierarchy Issue",
-                value=f"My role **({bot_top_role.mention})** needs to be above the staff role **({admin_role.mention})**.",
                 inline=False
             )
         
@@ -1126,6 +1105,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return
     
+    # If all permissions are good, create the ticket panel directly
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
     
