@@ -424,7 +424,6 @@ async def on_interaction(interaction: discord.Interaction):
                     )
                 except:
                     pass
-                # Check if permissions were granted
                 channel_perms = target_channel.permissions_for(bot_member)
                 category_perms = category.permissions_for(bot_member)
                 if not (channel_perms.view_channel and channel_perms.send_messages and channel_perms.read_message_history and channel_perms.manage_messages and channel_perms.embed_links) or not (category_perms.view_channel and category_perms.send_messages and category_perms.manage_channels and category_perms.read_message_history and category_perms.create_instant_invite):
@@ -438,14 +437,13 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.defer(ephemeral=True)
                 panel_description = "**CREATE A TICKET BELOW 🎟️**"
                 embed_color = discord.Colour.green()
-                # Save to persistent storage
                 TICKET_SETTINGS[target_channel.id] = {
                     "admin_role_id": admin_role_id,
                     "category_id": category_id,
                     "guild_id": interaction.guild.id,
                     "enable_claim_button": True,
                     "panel_channel_id": target_channel.id,
-                    "panel_message_id": None  # will be updated after sending
+                    "panel_message_id": None
                 }
                 save_ticket_settings(TICKET_SETTINGS)
                 panel_view = discord.ui.View(timeout=None)
@@ -459,7 +457,6 @@ async def on_interaction(interaction: discord.Interaction):
                 embed = discord.Embed(description=panel_description, color=embed_color)
                 embed.set_footer(text="Ticket System")
                 panel_msg = await target_channel.send(embed=embed, view=panel_view)
-                # Update with message ID
                 TICKET_SETTINGS[target_channel.id]["panel_message_id"] = panel_msg.id
                 save_ticket_settings(TICKET_SETTINGS)
                 await interaction.followup.send(f"✅ **Permissions Granted!** Ticket panel has been created in {target_channel.mention}.", ephemeral=True)
@@ -493,7 +490,6 @@ async def on_interaction(interaction: discord.Interaction):
                     guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                 }
                 ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites, reason=f"Ticket created by {interaction.user}")
-                # Save the ticket channel info (creator, admin role, etc.) for claim/close
                 TICKET_SETTINGS[ticket_channel.id] = {
                     "admin_role_id": settings["admin_role_id"],
                     "creator_id": interaction.user.id,
@@ -557,6 +553,7 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred while creating the ticket: {str(e)}", ephemeral=True)
 
+# ---- INSTANT PERMISSIONS: ONLY DISABLES TARGET PERMISSIONS ----
 @instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
 async def instant_permissions(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -941,32 +938,27 @@ async def create_ticket_panel(
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return
 
-    # Build the panel
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
 
-    # Check if there's an existing panel in this channel and update_panel is True
+    # If update_panel is True, try to remove the old panel message
     existing_settings = TICKET_SETTINGS.get(target_channel.id)
     if update_panel and existing_settings and existing_settings.get("panel_message_id"):
-        # Try to delete the old panel message
         try:
             old_msg = await target_channel.fetch_message(existing_settings["panel_message_id"])
             await old_msg.delete()
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            # If we can't delete, we'll just overwrite the stored ID later
-            pass
+            pass  # if we can't delete, we'll overwrite the ID later
 
-    # Prepare new settings
     new_settings = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
         "guild_id": interaction.guild.id,
         "enable_claim_button": enable_claim_button,
         "panel_channel_id": target_channel.id,
-        "panel_message_id": None  # will be set after sending
+        "panel_message_id": None
     }
 
-    # Create the view and embed
     panel_view = discord.ui.View(timeout=None)
     create_btn = discord.ui.Button(
         label=button_label,
@@ -984,15 +976,12 @@ async def create_ticket_panel(
     if image:
         embed.set_image(url=image.url)
 
-    # Send the panel message
     panel_msg = await target_channel.send(embed=embed, view=panel_view)
     new_settings["panel_message_id"] = panel_msg.id
 
-    # Update the stored settings
     TICKET_SETTINGS[target_channel.id] = new_settings
     save_ticket_settings(TICKET_SETTINGS)
 
-    # Confirm to the user
     if update_panel:
         await interaction.response.send_message(
             f"✅ Ticket panel **updated** successfully in {target_channel.mention}! The old panel has been replaced.",
@@ -1075,7 +1064,6 @@ async def close_ticket_callback(interaction: discord.Interaction):
             await interaction.followup.send("❌ Error: I don't have permission to delete this channel.")
         except Exception as e:
             await interaction.followup.send(f"❌ Error deleting channel: {str(e)}")
-        # Remove from settings after deletion
         if interaction.channel.id in TICKET_SETTINGS:
             del TICKET_SETTINGS[interaction.channel.id]
             save_ticket_settings(TICKET_SETTINGS)
@@ -1195,12 +1183,11 @@ async def on_message(message):
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
 
-# ---- FIXED .cmds COMMAND (EMBED WITH FALLBACK) ----
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot:
         return
-    print(f".cmds triggered by {ctx.author}")  # debug
+    print(f".cmds triggered by {ctx.author}")
 
     embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
     embed.add_field(
