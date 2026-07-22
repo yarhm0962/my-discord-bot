@@ -6,6 +6,7 @@ import base64
 import aiohttp
 import asyncio
 import discord
+import random
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -556,6 +557,41 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="obfuscate", description="Obfuscate your Lua script")
+@app_commands.describe(code="Paste your Lua code here")
+async def obfuscate_cmd(interaction: discord.Interaction, code: str):
+    await interaction.response.defer()
+    try:
+        key = random.randint(100000, 999999)
+        key_str = str(key)
+        encrypted = []
+        for i, char in enumerate(code):
+            kc = key_str[i % len(key_str)]
+            encrypted.append(chr(ord(char) ^ ord(kc)))
+        hex_data = ''.join(f'{ord(c):02x}' for c in encrypted)
+        obfuscated = f'''--[[ M1rage Obfuscator ]]
+local _G = _G or {{}}
+local originalError = error
+local bxor=function(a,b)local r=0 for i=0,30 do local p=2^i if(a>=p or b>=p)then r=r+p end if(a>=p)then a=a-p end if(b>=p)then b=b-p end end return r end
+local R=function(s,k)local r=""k=tostring(k)for i=1,#s,2 do local h=tonumber("0x"..s:sub(i,i+1))local b=string.byte(k,(((i-1)//2)%#k)+1)r=r..string.char(bxor(h,b))end return r end
+local notifyTamper=function()originalError("⚠️ Tampering detected!")end
+local protectedStore={{}}}
+setmetatable(_G,{{__newindex=function(t,k,v)if protectedStore[k]then notifyTamper()else rawset(t,k,v)end end,__metatable="🔒 Locked."}})
+local ENC="{hex_data}"
+local KEY={key}
+local OK,CODE=pcall(R,ENC,KEY)
+if OK then loadstring(CODE)()else error("❌ Decryption Failed!")end'''
+        
+        if len(obfuscated) > 1900:
+            with open("obfuscated.lua", "w", encoding="utf-8") as f:
+                f.write(obfuscated)
+            await interaction.followup.send(f"✅ **Obfuscated!** Key: `{key}`", file=discord.File("obfuscated.lua"))
+            os.remove("obfuscated.lua")
+        else:
+            await interaction.followup.send(f"✅ **Obfuscated!** Key: `{key}`\n```lua\n{obfuscated}\n```")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {str(e)}")
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
@@ -680,6 +716,7 @@ async def show_commands(ctx):
 **Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
+`/obfuscate code:` - Obfuscate your Lua script
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
