@@ -467,7 +467,15 @@ async def on_interaction(interaction: discord.Interaction):
             try:
                 settings = TICKET_SETTINGS.get(interaction.channel.id)
                 if not settings:
-                    return await interaction.response.send_message("❌ Error: Ticket panel is not configured properly. Please contact an admin.", ephemeral=True)
+                    # Provide a helpful message and suggest using /create ticket update-panel:True
+                    await interaction.response.send_message(
+                        "❌ **Ticket panel is not configured properly.**\n\n"
+                        "This panel was created before the bot's settings were saved.\n"
+                        "**To fix it:** run the command `/create ticket update-panel:True` in this channel.\n"
+                        "This will replace the old panel with a new one that works correctly.",
+                        ephemeral=True
+                    )
+                    return
                 guild = interaction.guild
                 ticket_category = guild.get_channel(settings["category_id"])
                 staff_role = guild.get_role(settings["admin_role_id"])
@@ -1318,21 +1326,26 @@ async def create_embed(interaction: discord.Interaction, description: str, title
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=plain_message if plain_message else None, embed=embed, allowed_mentions=allowed_mentions)
 
-@tree.command(name="refresh", description="Force refresh all slash commands (sync with Discord)")
+@tree.command(name="refresh", description="Force refresh all slash commands and reload ticket settings")
 @app_commands.default_permissions(administrator=True)
 async def refresh_commands(interaction: discord.Interaction):
-    """Sync the command tree with Discord – use after updating commands."""
+    """Sync slash commands and reload ticket settings from disk."""
     await interaction.response.defer(ephemeral=True)
     try:
+        # 1. Sync slash commands
         await bot.tree.sync()
+        # 2. Reload ticket settings from the file
+        global TICKET_SETTINGS
+        TICKET_SETTINGS = load_ticket_settings()
         await interaction.followup.send(
-            "✅ **All commands have been refreshed and synced with Discord!**\n"
-            "New commands should appear immediately.",
+            "✅ **Commands refreshed and ticket settings reloaded!**\n"
+            "New commands should appear immediately.\n"
+            "If you have old ticket panels, use `/create ticket update-panel:True` in that channel to fix them.",
             ephemeral=True
         )
     except Exception as e:
         await interaction.followup.send(
-            f"❌ Failed to sync commands: {str(e)}",
+            f"❌ Failed to refresh: {str(e)}",
             ephemeral=True
         )
 
