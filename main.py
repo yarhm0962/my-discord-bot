@@ -7,6 +7,7 @@ import aiohttp
 import asyncio
 import discord
 import random
+import json
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -49,7 +50,6 @@ tree.add_command(add_group)
 tree.add_command(instant_group)
 
 TICKET_SETTINGS = {}
-WARNINGS = {}
 AUTO_PURGE_SETTINGS = {}
 TIMEOUT_DURATION = 300
 MENTION_WARNINGS_ENABLED = True
@@ -57,6 +57,30 @@ IGNORED_WARNING_CHANNELS = set()
 IGNORED_WARNING_ROLES = set()
 PROTECTED_ROLES = set()
 VERIFIED_ROLE_CACHE = {}
+
+# Persistent warnings storage
+WARNINGS_FILE = "warnings.json"
+
+def load_warnings():
+    """Load warnings from JSON file"""
+    try:
+        if os.path.exists(WARNINGS_FILE):
+            with open(WARNINGS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading warnings: {e}")
+    return {}
+
+def save_warnings(warnings):
+    """Save warnings to JSON file"""
+    try:
+        with open(WARNINGS_FILE, 'w') as f:
+            json.dump(warnings, f)
+    except Exception as e:
+        print(f"Error saving warnings: {e}")
+
+# Load warnings at startup
+WARNINGS = load_warnings()
 
 def parse_time(time_str):
     if not time_str:
@@ -228,6 +252,57 @@ async def schedule_auto_purge(channel_id):
         await channel.send(embed=embed)
     except Exception:
         pass
+
+def obfuscate_lua_code(code):
+    """Obfuscate Lua code and return the obfuscated code and key"""
+    key = random.randint(100000, 999999)
+    key_str = str(key)
+    encrypted = []
+    for i, char in enumerate(code):
+        kc = key_str[i % len(key_str)]
+        encrypted.append(chr(ord(char) ^ ord(kc)))
+    hex_data = ''.join(f'{ord(c):02x}' for c in encrypted)
+
+    obfuscated = f'''--[[ M1rage Obfuscator ]]
+local _G = _G or {{}}
+local originalError = error
+local bxor=function(a,b)
+local r=0
+for i=0,30 do
+local p=2^i
+if (a>=p or b>=p) then r=r+p end
+if (a>=p) then a=a-p end
+if (b>=p) then b=b-p end
+end
+return r
+end
+local R=function(s,k)
+local r=""
+k=tostring(k)
+for i=1,#s,2 do
+local h=tonumber("0x"..s:sub(i,i+1))
+local b=string.byte(k,(((i-1)//2)%#k)+1)
+r=r..string.char(bxor(h,b))
+end
+return r
+end
+local notifyTamper=function()originalError("Tampering detected!")end
+local protectedStore={{}}
+setmetatable(_G,{{
+__newindex=function(t,k,v)
+if protectedStore[k]then
+notifyTamper()
+else
+rawset(t,k,v)
+end
+end,
+__metatable="This metatable is locked."
+}})
+local ENC="{hex_data}"
+local KEY={key}
+local OK,CODE=pcall(R,ENC,KEY)
+if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
+    return obfuscated, key
 
 @bot.event
 async def on_member_join(member):
@@ -558,67 +633,56 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="obfuscate", description="Obfuscate your Lua script")
-@app_commands.describe(code="Paste your Lua code here")
-async def obfuscate_cmd(interaction: discord.Interaction, code: str):
+@app_commands.describe(
+    code="Optional: Paste your Lua code here",
+    file="Optional: Upload a .lua file to obfuscate"
+)
+async def obfuscate_cmd(interaction: discord.Interaction, code: str = None, file: discord.Attachment = None):
+    # Check if either code or file is provided
+    if code is None and file is None:
+        return await interaction.response.send_message("❌ Error: Please provide either `code:` or `file:`", ephemeral=True)
+    
+    # If both are provided, prioritize the file
+    if file is not None:
+        # Check file extension
+        if not file.filename.endswith('.lua') and not file.filename.endswith('.txt'):
+            return await interaction.response.send_message("❌ Error: Please upload a .lua or .txt file", ephemeral=True)
+        
+        try:
+            # Read the file content
+            content = (await file.read()).decode('utf-8', errors='ignore')
+            if not content or len(content.strip()) == 0:
+                return await interaction.response.send_message("❌ Error: The file is empty", ephemeral=True)
+            code = content
+        except Exception as e:
+            return await interaction.response.send_message(f"❌ Error reading file: {str(e)}", ephemeral=True)
+    
     await interaction.response.defer()
+    
     try:
-        key = random.randint(100000, 999999)
-        key_str = str(key)
-        encrypted = []
-        for i, char in enumerate(code):
-            kc = key_str[i % len(key_str)]
-            encrypted.append(chr(ord(char) ^ ord(kc)))
-        hex_data = ''.join(f'{ord(c):02x}' for c in encrypted)
-
-        obfuscated = f'''--[[ M1rage Obfuscator ]]
-local _G = _G or {{}}
-local originalError = error
-local bxor=function(a,b)
-local r=0
-for i=0,30 do
-local p=2^i
-if (a>=p or b>=p) then r=r+p end
-if (a>=p) then a=a-p end
-if (b>=p) then b=b-p end
-end
-return r
-end
-local R=function(s,k)
-local r=""
-k=tostring(k)
-for i=1,#s,2 do
-local h=tonumber("0x"..s:sub(i,i+1))
-local b=string.byte(k,(((i-1)//2)%#k)+1)
-r=r..string.char(bxor(h,b))
-end
-return r
-end
-local notifyTamper=function()originalError("Tampering detected!")end
-local protectedStore={{}}
-setmetatable(_G,{{
-__newindex=function(t,k,v)
-if protectedStore[k]then
-notifyTamper()
-else
-rawset(t,k,v)
-end
-end,
-__metatable="This metatable is locked."
-}})
-local ENC="{hex_data}"
-local KEY={key}
-local OK,CODE=pcall(R,ENC,KEY)
-if OK then loadstring(CODE)()else error("Decryption Failed!")end'''
-
+        obfuscated, key = obfuscate_lua_code(code)
+        
+        # Generate output filename
+        timestamp = discord.utils.utcnow().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"obfuscated_{timestamp}.lua"
+        
+        # Check if the obfuscated code is too long for Discord message
         if len(obfuscated) > 1900:
-            with open("obfuscated.lua", "w", encoding="utf-8") as f:
+            # Save to file and send as attachment
+            with open(output_filename, 'w', encoding='utf-8') as f:
                 f.write(obfuscated)
-            await interaction.followup.send(f"Obfuscated! Key: {key}", file=discord.File("obfuscated.lua"))
-            os.remove("obfuscated.lua")
+            await interaction.followup.send(
+                f"✅ **Obfuscated!** Key: `{key}`",
+                file=discord.File(output_filename)
+            )
+            os.remove(output_filename)
         else:
-            await interaction.followup.send(f"Obfuscated! Key: {key}\n```lua\n{obfuscated}\n```")
+            # Send as code block
+            await interaction.followup.send(
+                f"✅ **Obfuscated!** Key: `{key}`\n```lua\n{obfuscated}\n```"
+            )
     except Exception as e:
-        await interaction.followup.send(f"Error: {str(e)}")
+        await interaction.followup.send(f"❌ Error: {str(e)}")
 
 @bot.event
 async def on_message(message):
@@ -655,12 +719,17 @@ async def on_message(message):
                         break
             
             if mentioned_protected:
-                guild_id = message.guild.id
-                user_id = message.author.id
-                WARNINGS.setdefault(guild_id, {})
-                WARNINGS[guild_id].setdefault(user_id, 0)
+                guild_id = str(message.guild.id)
+                user_id = str(message.author.id)
+                
+                if guild_id not in WARNINGS:
+                    WARNINGS[guild_id] = {}
+                if user_id not in WARNINGS[guild_id]:
+                    WARNINGS[guild_id][user_id] = 0
+                
                 WARNINGS[guild_id][user_id] += 1
                 count = WARNINGS[guild_id][user_id]
+                save_warnings(WARNINGS)
                 
                 if count == 1:
                     embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
@@ -677,11 +746,13 @@ async def on_message(message):
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning a protected role.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
+                        save_warnings(WARNINGS)
                     except Exception as e:
                         embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning protected roles.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
+                        save_warnings(WARNINGS)
 
     # Check for highest role mentions
     if MENTION_WARNINGS_ENABLED and message.channel.id not in IGNORED_WARNING_CHANNELS:
@@ -701,12 +772,17 @@ async def on_message(message):
                         break
             
             if mentioned_highest:
-                guild_id = message.guild.id
-                user_id = message.author.id
-                WARNINGS.setdefault(guild_id, {})
-                WARNINGS[guild_id].setdefault(user_id, 0)
+                guild_id = str(message.guild.id)
+                user_id = str(message.author.id)
+                
+                if guild_id not in WARNINGS:
+                    WARNINGS[guild_id] = {}
+                if user_id not in WARNINGS[guild_id]:
+                    WARNINGS[guild_id][user_id] = 0
+                
                 WARNINGS[guild_id][user_id] += 1
                 count = WARNINGS[guild_id][user_id]
+                save_warnings(WARNINGS)
                 
                 if count == 1:
                     embed = discord.Embed(title="⚠️ Warning 1/3", color=discord.Colour.yellow())
@@ -723,11 +799,13 @@ async def on_message(message):
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3** and have been **timed out for 5 minutes** for repeatedly mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
+                        save_warnings(WARNINGS)
                     except Exception as e:
                         embed = discord.Embed(title="⚠️ Warning 3/3", color=discord.Colour.red())
                         embed.description = f"{message.author.mention}, you have received **Warning 3/3**! Please stop mentioning the highest role.\n\n⚠️ **Your warnings have been reset.**"
                         await message.channel.send(embed=embed)
                         WARNINGS[guild_id][user_id] = 0
+                        save_warnings(WARNINGS)
         
     await bot.process_commands(message)
 
@@ -744,7 +822,7 @@ async def show_commands(ctx):
 **Protected Roles** - Set specific roles that trigger warnings for EVERYONE (including admins) when mentioned
 """, inline=False)
     embed.add_field(name="Slash Commands", value="""
-`/obfuscate code:` - Obfuscate your Lua script
+`/obfuscate code:` or `/obfuscate file:` - Obfuscate your Lua script (paste or upload file)
 `/instant permissions` - Instantly disable @everyone messaging in ALL channels
 `/add verify role:@role enabled-channel:#channel` - Set up verification system and auto-role members
 `/say message:` - Send a custom message as the bot with mentions
@@ -1091,6 +1169,7 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    print(f"Loaded warnings for {len(WARNINGS)} guilds")
     try: await tree.sync()
     except Exception as e: print(f"Sync Error: {e}")
 
