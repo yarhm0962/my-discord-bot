@@ -1056,7 +1056,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
     if category_missing_perms:
         all_missing.append(f"**In {category.name} category:**\n• " + "\n• ".join(category_missing_perms))
     
-    # If there are missing permissions, show the fix button (role hierarchy is ignored)
+    # If there are missing permissions, show the fix button
     if all_missing:
         embed = discord.Embed(
             title="❌ Permission Error",
@@ -1391,7 +1391,7 @@ async def show_commands(ctx):
 `/warning mention status:[On/Off] [ignored-channel:] [ignore-role:] [protected-role:]` - Toggle mention warnings, exclude channels/roles, and protect roles
 `/auto purge messages channel: time:` - Purge a channel after it goes quiet for a set time (1s/1m/1h/1d)
 `/create ticket admin-role:@role category:#category select-channel:#channel enable-claim-button:On/Off` - Create a ticket panel
-`/create embed [plain-message:]` - Create a custom embed with optional plain text message
+`/create embed [plain-message:]` - Create a custom embed with optional plain text message (both in one message)
 `/ban user:@User` - Ban a user
 `/unban user_id:` - Unban a user by ID
 `/kick user:@User` - Kick a user
@@ -1430,19 +1430,19 @@ async def deobf_prefix(ctx, *, link: str):
     await ctx.send(file=discord.File(filename))
     os.remove(filename)
 
-@create_group.command(name="embed", description="Create a custom embed with optional plain message")
+@create_group.command(name="embed", description="Create a custom embed with an optional plain text message (both in one message)")
 @app_commands.describe(
     description="Required: The embed description text",
     title="Optional: The embed title",
     footer="Optional: The embed footer text",
     image="Optional: A large image to display on the embed",
     color="Optional: Embed color (name or hex, default: green)",
-    plain_message="Optional: A plain text message to send before the embed (supports @everyone, @here, role and user mentions)"
+    plain_message="Optional: A plain text message to include in the same message (supports @everyone, @here, role and user mentions)"
 )
 @app_commands.rename(plain_message="plain-message")
 async def create_embed(interaction: discord.Interaction, description: str, title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", plain_message: str = ""):
     if not interaction.user.guild_permissions.manage_messages:
-        return await interaction.response.send_message("Error: Missing permission — Manage Messages", ephemeral=True)
+        return await interaction.response.send_message("❌ Error: Missing permission — Manage Messages", ephemeral=True)
     
     embed_color = get_color(color)
     embed = discord.Embed(description=description, color=embed_color)
@@ -1453,13 +1453,12 @@ async def create_embed(interaction: discord.Interaction, description: str, title
     if image:
         embed.set_image(url=image.url)
     
-    await interaction.response.send_message("Embed sent successfully!", ephemeral=True)
+    await interaction.response.send_message("✅ Embed sent successfully!", ephemeral=True)
     
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
-    if plain_message:
-        await interaction.channel.send(content=plain_message, allowed_mentions=allowed_mentions)
     
-    await interaction.channel.send(embed=embed)
+    # Send a single message with both content and embed
+    await interaction.channel.send(content=plain_message if plain_message else None, embed=embed, allowed_mentions=allowed_mentions)
 
 @tree.command(name="ban", description="Ban a user from the server")
 @app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
