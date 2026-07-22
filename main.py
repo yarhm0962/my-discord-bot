@@ -553,7 +553,6 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred while creating the ticket: {str(e)}", ephemeral=True)
 
-# ---- INSTANT PERMISSIONS: ONLY DISABLES TARGET PERMISSIONS ----
 @instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
 async def instant_permissions(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -948,7 +947,7 @@ async def create_ticket_panel(
             old_msg = await target_channel.fetch_message(existing_settings["panel_message_id"])
             await old_msg.delete()
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass  # if we can't delete, we'll overwrite the ID later
+            pass
 
     new_settings = {
         "admin_role_id": admin_role.id,
@@ -1205,7 +1204,8 @@ async def show_commands(ctx):
     )
     embed.add_field(
         name="Slash Commands",
-        value="`/deobf file:` – Deobfuscate from uploaded `.lua` file\n"
+        value="`/refresh` – Force refresh all slash commands (sync with Discord)\n"
+              "`/deobf file:` – Deobfuscate from uploaded `.lua` file\n"
               "`/deobf code:` – Deobfuscate from pasted Lua code\n"
               "`/instant permissions` – Instantly disable @everyone messaging in ALL channels\n"
               "`/add verify` – Set up verification system\n"
@@ -1232,10 +1232,8 @@ async def show_commands(ctx):
             "`.d <link>` – Deobfuscate from URL\n"
             "`.cmds` – Show this command list\n"
             "`.purge <amount>` – Delete messages (max 1000)\n\n"
-            "**Auto‑Features**\n"
-            "• Mention Protection – warns & times out non‑admins\n"
-            "• Protected Roles – warns everyone when mentioned\n\n"
             "**Slash Commands**\n"
+            "`/refresh` – Force sync commands\n"
             "`/deobf file/code`, `/instant permissions`, `/add verify`, `/say`,\n"
             "`/warning mention`, `/auto purge messages`, `/create ticket`, `/create embed`,\n"
             "`/ban`, `/unban`, `/kick`, `/mute`, `/unmute`"
@@ -1319,6 +1317,24 @@ async def create_embed(interaction: discord.Interaction, description: str, title
     await interaction.response.send_message("✅ Embed sent successfully!", ephemeral=True)
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=plain_message if plain_message else None, embed=embed, allowed_mentions=allowed_mentions)
+
+@tree.command(name="refresh", description="Force refresh all slash commands (sync with Discord)")
+@app_commands.default_permissions(administrator=True)
+async def refresh_commands(interaction: discord.Interaction):
+    """Sync the command tree with Discord – use after updating commands."""
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await bot.tree.sync()
+        await interaction.followup.send(
+            "✅ **All commands have been refreshed and synced with Discord!**\n"
+            "New commands should appear immediately.",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Failed to sync commands: {str(e)}",
+            ephemeral=True
+        )
 
 @tree.command(name="ban", description="Ban a user from the server")
 @app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
@@ -1536,8 +1552,9 @@ async def on_ready():
     print(f"Loaded ticket settings for {len(TICKET_SETTINGS)} panels")
     try:
         await tree.sync()
+        print("Initial command sync completed")
     except Exception as e:
-        print(f"Sync Error: {e}")
+        print(f"Initial sync error: {e}")
 
 if __name__ == "__main__":
     keep_alive()
