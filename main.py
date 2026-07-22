@@ -50,7 +50,6 @@ tree.add_command(auto_group)
 tree.add_command(add_group)
 tree.add_command(instant_group)
 
-TICKET_SETTINGS = {}
 AUTO_PURGE_SETTINGS = {}
 TIMEOUT_DURATION = 300
 MENTION_WARNINGS_ENABLED = True
@@ -81,6 +80,29 @@ def save_warnings(warnings):
         print(f"Error saving warnings: {e}")
 
 WARNINGS = load_warnings()
+
+# Persistent ticket settings storage
+TICKET_SETTINGS_FILE = "ticket_settings.json"
+
+def load_ticket_settings():
+    try:
+        if os.path.exists(TICKET_SETTINGS_FILE):
+            with open(TICKET_SETTINGS_FILE, 'r') as f:
+                data = json.load(f)
+                return {int(k): v for k, v in data.items()}
+    except Exception as e:
+        print(f"Error loading ticket settings: {e}")
+    return {}
+
+def save_ticket_settings(settings):
+    try:
+        data = {str(k): v for k, v in settings.items()}
+        with open(TICKET_SETTINGS_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving ticket settings: {e}")
+
+TICKET_SETTINGS = load_ticket_settings()
 
 def parse_time(time_str):
     if not time_str:
@@ -416,13 +438,16 @@ async def on_interaction(interaction: discord.Interaction):
                 await interaction.response.defer(ephemeral=True)
                 panel_description = "**CREATE A TICKET BELOW 🎟️**"
                 embed_color = discord.Colour.green()
+                # Save to persistent storage
                 TICKET_SETTINGS[target_channel.id] = {
                     "admin_role_id": admin_role_id,
                     "category_id": category_id,
                     "guild_id": interaction.guild.id,
                     "enable_claim_button": True,
-                    "panel_channel_id": target_channel.id
+                    "panel_channel_id": target_channel.id,
+                    "panel_message_id": None  # will be updated after sending
                 }
+                save_ticket_settings(TICKET_SETTINGS)
                 panel_view = discord.ui.View(timeout=None)
                 create_btn = discord.ui.Button(
                     label="Create Ticket",
@@ -433,7 +458,10 @@ async def on_interaction(interaction: discord.Interaction):
                 panel_view.add_item(create_btn)
                 embed = discord.Embed(description=panel_description, color=embed_color)
                 embed.set_footer(text="Ticket System")
-                await target_channel.send(embed=embed, view=panel_view)
+                panel_msg = await target_channel.send(embed=embed, view=panel_view)
+                # Update with message ID
+                TICKET_SETTINGS[target_channel.id]["panel_message_id"] = panel_msg.id
+                save_ticket_settings(TICKET_SETTINGS)
                 await interaction.followup.send(f"✅ **Permissions Granted!** Ticket panel has been created in {target_channel.mention}.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
@@ -465,12 +493,14 @@ async def on_interaction(interaction: discord.Interaction):
                     guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                 }
                 ticket_channel = await ticket_category.create_text_channel(name=channel_name, overwrites=overwrites, reason=f"Ticket created by {interaction.user}")
+                # Save the ticket channel info (creator, admin role, etc.) for claim/close
                 TICKET_SETTINGS[ticket_channel.id] = {
                     "admin_role_id": settings["admin_role_id"],
                     "creator_id": interaction.user.id,
                     "category_id": settings["category_id"],
                     "enable_claim_button": settings.get("enable_claim_button", True)
                 }
+                save_ticket_settings(TICKET_SETTINGS)
                 ticket_embed = discord.Embed(
                     title="🎫 Ticket Created",
                     description="**Please wait for a staff member to assist you**",
@@ -791,12 +821,13 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
     await interaction.response.send_message(embed=embed)
 
-@create_group.command(name="ticket", description="Create a ticket panel")
+@create_group.command(name="ticket", description="Create or update a ticket panel")
 @app_commands.describe(
     admin_role="Required: Role that manages and responds to tickets",
     category="Required: Category where tickets will be created",
     select_channel="Required: Select a specific channel where the ticket panel will be sent",
     enable_claim_button="Required: Toggle the Claim Ticket button inside tickets (On/Off)",
+    update_panel="Required: If True, replace the existing panel in the selected channel (if any)",
     description="Optional: Custom panel description",
     title="Optional: Panel embed title",
     footer="Optional: Panel embed footer text",
@@ -809,10 +840,25 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     admin_role="admin-role",
     select_channel="select-channel",
     enable_claim_button="enable-claim-button",
+    update_panel="update-panel",
     button_label="button-label",
     button_emoji="button-emoji"
 )
-async def create_ticket_panel(interaction: discord.Interaction, admin_role: discord.Role, category: discord.CategoryChannel, select_channel: discord.TextChannel, enable_claim_button: bool = True, description: str = "", title: str = "", footer: str = "", image: discord.Attachment = None, color: str = "green", button_label: str = "Create Ticket", button_emoji: str = "🎟️"):
+async def create_ticket_panel(
+    interaction: discord.Interaction,
+    admin_role: discord.Role,
+    category: discord.CategoryChannel,
+    select_channel: discord.TextChannel,
+    enable_claim_button: bool,
+    update_panel: bool,
+    description: str = "",
+    title: str = "",
+    footer: str = "",
+    image: discord.Attachment = None,
+    color: str = "green",
+    button_label: str = "Create Ticket",
+    button_emoji: str = "🎟️"
+):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Error: Administrator permission is required", ephemeral=True)
     if not category:
@@ -823,6 +869,8 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         return await interaction.response.send_message("❌ Error: The specified channel does not exist.", ephemeral=True)
     target_channel = select_channel
     bot_member = interaction.guild.get_member(bot.user.id)
+
+    # Check permissions in the target channel
     channel_perms = target_channel.permissions_for(bot_member)
     channel_missing_perms = []
     if not channel_perms.view_channel:
@@ -835,6 +883,8 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         channel_missing_perms.append("Manage Messages")
     if not channel_perms.embed_links:
         channel_missing_perms.append("Embed Links")
+
+    # Check permissions in the category
     category_perms = category.permissions_for(bot_member)
     category_missing_perms = []
     if not category_perms.view_channel:
@@ -847,11 +897,13 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         category_missing_perms.append("Read Message History")
     if not category_perms.create_instant_invite:
         category_missing_perms.append("Create Instant Invite")
+
     all_missing = []
     if channel_missing_perms:
         all_missing.append(f"**In {target_channel.mention}:**\n• " + "\n• ".join(channel_missing_perms))
     if category_missing_perms:
         all_missing.append(f"**In {category.name} category:**\n• " + "\n• ".join(category_missing_perms))
+
     if all_missing:
         embed = discord.Embed(
             title="❌ Permission Error",
@@ -888,15 +940,33 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         view.add_item(cancel_btn)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         return
+
+    # Build the panel
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
-    TICKET_SETTINGS[target_channel.id] = {
+
+    # Check if there's an existing panel in this channel and update_panel is True
+    existing_settings = TICKET_SETTINGS.get(target_channel.id)
+    if update_panel and existing_settings and existing_settings.get("panel_message_id"):
+        # Try to delete the old panel message
+        try:
+            old_msg = await target_channel.fetch_message(existing_settings["panel_message_id"])
+            await old_msg.delete()
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # If we can't delete, we'll just overwrite the stored ID later
+            pass
+
+    # Prepare new settings
+    new_settings = {
         "admin_role_id": admin_role.id,
         "category_id": category.id,
         "guild_id": interaction.guild.id,
         "enable_claim_button": enable_claim_button,
-        "panel_channel_id": target_channel.id
+        "panel_channel_id": target_channel.id,
+        "panel_message_id": None  # will be set after sending
     }
+
+    # Create the view and embed
     panel_view = discord.ui.View(timeout=None)
     create_btn = discord.ui.Button(
         label=button_label,
@@ -905,6 +975,7 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         custom_id="create_ticket_btn"
     )
     panel_view.add_item(create_btn)
+
     embed = discord.Embed(description=panel_description, color=embed_color)
     if title:
         embed.title = title
@@ -912,11 +983,26 @@ async def create_ticket_panel(interaction: discord.Interaction, admin_role: disc
         embed.set_footer(text=footer)
     if image:
         embed.set_image(url=image.url)
-    await target_channel.send(embed=embed, view=panel_view)
-    await interaction.response.send_message(
-        f"✅ Ticket panel created successfully in {target_channel.mention}!",
-        ephemeral=True
-    )
+
+    # Send the panel message
+    panel_msg = await target_channel.send(embed=embed, view=panel_view)
+    new_settings["panel_message_id"] = panel_msg.id
+
+    # Update the stored settings
+    TICKET_SETTINGS[target_channel.id] = new_settings
+    save_ticket_settings(TICKET_SETTINGS)
+
+    # Confirm to the user
+    if update_panel:
+        await interaction.response.send_message(
+            f"✅ Ticket panel **updated** successfully in {target_channel.mention}! The old panel has been replaced.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"✅ Ticket panel created successfully in {target_channel.mention}!",
+            ephemeral=True
+        )
 
 @deobf_group.command(name="file", description="Deobfuscate a Lua script from a file")
 @app_commands.describe(
@@ -989,6 +1075,10 @@ async def close_ticket_callback(interaction: discord.Interaction):
             await interaction.followup.send("❌ Error: I don't have permission to delete this channel.")
         except Exception as e:
             await interaction.followup.send(f"❌ Error deleting channel: {str(e)}")
+        # Remove from settings after deletion
+        if interaction.channel.id in TICKET_SETTINGS:
+            del TICKET_SETTINGS[interaction.channel.id]
+            save_ticket_settings(TICKET_SETTINGS)
     except Exception as e:
         print(f"Close ticket error: {e}")
         await interaction.response.send_message(
@@ -1112,7 +1202,6 @@ async def show_commands(ctx):
         return
     print(f".cmds triggered by {ctx.author}")  # debug
 
-    # Build the embed
     embed = discord.Embed(title="📋 Bot Commands", color=discord.Colour.blue())
     embed.add_field(
         name="Prefix Commands",
@@ -1136,7 +1225,7 @@ async def show_commands(ctx):
               "`/say` – Send a custom message with mentions\n"
               "`/warning mention` – Toggle mention warnings, exclude channels/roles, protect roles\n"
               "`/auto purge messages` – Auto‑purge a channel after inactivity\n"
-              "`/create ticket` – Create a ticket panel\n"
+              "`/create ticket` – Create or update a ticket panel\n"
               "`/create embed` – Create a custom embed with optional plain text message\n"
               "`/ban` – Ban a user\n"
               "`/unban` – Unban a user by ID\n"
@@ -1147,11 +1236,9 @@ async def show_commands(ctx):
     )
     embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
 
-    # Try to send the embed; fall back to plain text if Embed Links is missing
     try:
         await ctx.send(embed=embed)
     except discord.Forbidden:
-        # Fallback plain text (no embed)
         plain = (
             "**📋 Bot Commands**\n\n"
             "**Prefix Commands**\n"
@@ -1168,7 +1255,6 @@ async def show_commands(ctx):
         )
         await ctx.send(plain)
 
-    # Delete the command message if possible
     try:
         await ctx.message.delete()
     except:
@@ -1460,6 +1546,7 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
 async def on_ready():
     print(f"Logged in as {bot.user}")
     print(f"Loaded warnings for {len(WARNINGS)} guilds")
+    print(f"Loaded ticket settings for {len(TICKET_SETTINGS)} panels")
     try:
         await tree.sync()
     except Exception as e:
