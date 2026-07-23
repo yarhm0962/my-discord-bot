@@ -43,7 +43,9 @@ if not MONGO_URI:
     raise RuntimeError("MONGO_URI environment variable not set")
 
 mongo_client = pymongo.MongoClient(MONGO_URI)
-db = mongo_client.get_default_database()  # or specify a database name
+DB_NAME = "BotDB"   # ← Change this to your preferred database name
+db = mongo_client[DB_NAME]
+
 warnings_col = db["warnings"]
 ticket_settings_col = db["ticket_settings"]
 
