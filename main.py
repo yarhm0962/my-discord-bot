@@ -10,6 +10,7 @@ import random
 import subprocess
 import sys
 import pymongo
+import traceback
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
@@ -36,46 +37,74 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
+# ─── MongoDB Setup with Fallback ──────────────────────────────────────────────
 MONGODB_URI = os.getenv("MONGODB_URI")
-if not MONGODB_URI:
-    print("ERROR: MONGODB_URI environment variable not set.")
-    sys.exit(1)
+USE_MONGO = False
+warnings_col = None
+ticket_settings_col = None
 
-mongo_client = pymongo.MongoClient(MONGODB_URI)
-db = mongo_client.get_database("bot_data")
-warnings_col = db["warnings"]
-ticket_settings_col = db["ticket_settings"]
+if MONGODB_URI:
+    try:
+        mongo_client = pymongo.MongoClient(MONGODB_URI)
+        db = mongo_client.get_database("bot_data")
+        warnings_col = db["warnings"]
+        ticket_settings_col = db["ticket_settings"]
+        USE_MONGO = True
+        print("✅ Connected to MongoDB")
+    except Exception as e:
+        print(f"❌ MongoDB connection error: {e}")
+        print("⚠️ Running without persistent storage (in-memory only)")
+        USE_MONGO = False
 
+# ─── Warnings ──────────────────────────────────────────────────────────────────
 def load_warnings():
-    data = warnings_col.find_one({"_id": "global"})
-    if data and "warnings" in data:
-        return data["warnings"]
+    if USE_MONGO:
+        try:
+            data = warnings_col.find_one({"_id": "global"})
+            if data and "warnings" in data:
+                return data["warnings"]
+        except Exception as e:
+            print(f"⚠️ Failed to load warnings from MongoDB: {e}")
     return {}
 
 def save_warnings(warnings):
-    warnings_col.update_one(
-        {"_id": "global"},
-        {"$set": {"warnings": warnings}},
-        upsert=True
-    )
+    if USE_MONGO:
+        try:
+            warnings_col.update_one(
+                {"_id": "global"},
+                {"$set": {"warnings": warnings}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to save warnings to MongoDB: {e}")
 
 WARNINGS = load_warnings()
 
+# ─── Ticket Settings ──────────────────────────────────────────────────────────
 def load_ticket_settings():
-    data = ticket_settings_col.find_one({"_id": "global"})
-    if data and "settings" in data:
-        return data["settings"]
+    if USE_MONGO:
+        try:
+            data = ticket_settings_col.find_one({"_id": "global"})
+            if data and "settings" in data:
+                return data["settings"]
+        except Exception as e:
+            print(f"⚠️ Failed to load ticket settings from MongoDB: {e}")
     return {}
 
 def save_ticket_settings(settings):
-    ticket_settings_col.update_one(
-        {"_id": "global"},
-        {"$set": {"settings": settings}},
-        upsert=True
-    )
+    if USE_MONGO:
+        try:
+            ticket_settings_col.update_one(
+                {"_id": "global"},
+                {"$set": {"settings": settings}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to save ticket settings to MongoDB: {e}")
 
 TICKET_SETTINGS = load_ticket_settings()
 
+# ─── Groups ──────────────────────────────────────────────────────────────────
 create_group = app_commands.Group(name="create", description="Commands for creation")
 warning_group = app_commands.Group(name="warning", description="Warning system commands")
 deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
@@ -99,6 +128,7 @@ IGNORED_WARNING_ROLES = set()
 PROTECTED_ROLES = set()
 VERIFIED_ROLE_CACHE = {}
 
+# ─── Utility functions ──────────────────────────────────────────────────────
 def parse_time(time_str):
     if not time_str:
         return None
@@ -141,6 +171,7 @@ def get_color(color_str):
             embed_color = discord.Colour.green()
     return embed_color
 
+# ─── Deobfuscation ────────────────────────────────────────────────────────────
 def extract_url(text):
     patterns = [
         r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
@@ -1603,9 +1634,9 @@ async def on_ready():
     print(f"Loaded ticket settings for {len(TICKET_SETTINGS)} panels")
     try:
         await tree.sync()
-        print("Initial command sync completed")
+        print("✅ Slash commands synced")
     except Exception as e:
-        print(f"Initial sync error: {e}")
+        print(f"⚠️ Initial sync error: {e}")
 
 if __name__ == "__main__":
     keep_alive()
