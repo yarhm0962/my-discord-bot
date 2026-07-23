@@ -38,12 +38,15 @@ bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
 # ─── MongoDB Setup ──────────────────────────────────────────────────────────────
-MONGO_URI = os.getenv('MONGO_URI')
+# Hardcoded fallback – replace <db_password> with your actual password
+DEFAULT_MONGO_URI = "mongodb+srv://xyrielzen16_db_user:<db_password>@panelbot.aubckg7.mongodb.net/?appName=PanelBot"
+
+MONGO_URI = os.getenv('MONGO_URI') or DEFAULT_MONGO_URI
 if not MONGO_URI:
-    raise RuntimeError("MONGO_URI environment variable not set")
+    raise RuntimeError("MONGO_URI environment variable not set and no default provided")
 
 mongo_client = pymongo.MongoClient(MONGO_URI)
-DB_NAME = "BotDB"   # ← Change this to your preferred database name
+DB_NAME = "BotDB"
 db = mongo_client[DB_NAME]
 
 warnings_col = db["warnings"]
@@ -1107,7 +1110,7 @@ async def purge_plain(interaction: discord.Interaction, amount: int):
     if amount > 1000:
         return await interaction.response.send_message("❌ Maximum amount is 1000.", ephemeral=True)
 
-    await interaction.response.defer(ephemeral=False)  # public reply
+    await interaction.response.defer(ephemeral=False)
 
     def is_plain_text(msg):
         if msg.embeds:
