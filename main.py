@@ -1072,6 +1072,7 @@ async def close_ticket_callback(interaction: discord.Interaction):
             ephemeral=True
         )
 
+# ---- FIXED purge-plain command ----
 @tree.command(name="purge-plain", description="Delete only plain text messages (no embeds/images/attachments)")
 @app_commands.describe(amount="Number of messages to check (max 1000)")
 async def purge_plain(interaction: discord.Interaction, amount: int):
@@ -1112,10 +1113,9 @@ async def purge_plain(interaction: discord.Interaction, amount: int):
                     pass
             await asyncio.sleep(0.2)
 
-        await interaction.followup.send(
-            f"✅ Deleted **{deleted_count}** plain‑text messages.",
-            delete_after=5
-        )
+        await interaction.followup.send(f"✅ Deleted **{deleted_count}** plain‑text messages.")
+        await asyncio.sleep(5)
+        await interaction.delete_original_response()
     except Exception as e:
         await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
