@@ -1110,12 +1110,6 @@ async def purge_plain(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=False)  # public reply
 
     def is_plain_text(msg):
-        # A plain text message has:
-        # - no embeds
-        # - no attachments
-        # - no stickers
-        # - no components (buttons, etc.)
-        # - content is not empty (though we can include empty? we'll include non-empty)
         if msg.embeds:
             return False
         if msg.attachments:
@@ -1124,31 +1118,23 @@ async def purge_plain(interaction: discord.Interaction, amount: int):
             return False
         if msg.components:
             return False
-        # If it's a system message (like a join) – also skip
         if msg.type != discord.MessageType.default:
             return False
-        # If content is empty, it's likely just an embed/image-only message, skip.
         if not msg.content:
             return False
         return True
 
     try:
         deleted_count = 0
-        # We need to scan messages until we've deleted 'amount' plain-text messages or we run out.
-        # Since purge() doesn't filter, we manually iterate.
-        async for msg in interaction.channel.history(limit=2000):  # upper bound
+        async for msg in interaction.channel.history(limit=2000):
             if deleted_count >= amount:
                 break
             if is_plain_text(msg):
                 try:
                     await msg.delete()
                     deleted_count += 1
-                except discord.Forbidden:
-                    # skip if we can't delete
+                except:
                     pass
-                except Exception:
-                    pass
-            # Add a small delay to avoid hitting rate limits
             await asyncio.sleep(0.2)
 
         await interaction.followup.send(
