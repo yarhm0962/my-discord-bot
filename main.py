@@ -8,12 +8,11 @@ import asyncio
 import discord
 import random
 import subprocess
+import sys
+import pymongo
 from datetime import timedelta
 from discord import app_commands
 from discord.ext import commands
-
-# MongoDB
-import pymongo
 
 app = Flask('')
 
@@ -37,22 +36,16 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 tree = bot.tree
 
-# ─── MongoDB Setup ──────────────────────────────────────────────────────────────
-# Hardcoded fallback – replace <db_password> with your actual password
-DEFAULT_MONGO_URI = "mongodb+srv://xyrielzen16_db_user:<db_password>@panelbot.aubckg7.mongodb.net/?appName=PanelBot"
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    print("ERROR: MONGODB_URI environment variable not set.")
+    sys.exit(1)
 
-MONGO_URI = os.getenv('MONGO_URI') or DEFAULT_MONGO_URI
-if not MONGO_URI:
-    raise RuntimeError("MONGO_URI environment variable not set and no default provided")
-
-mongo_client = pymongo.MongoClient(MONGO_URI)
-DB_NAME = "BotDB"
-db = mongo_client[DB_NAME]
-
+mongo_client = pymongo.MongoClient(MONGODB_URI)
+db = mongo_client.get_database("bot_data")
 warnings_col = db["warnings"]
 ticket_settings_col = db["ticket_settings"]
 
-# ─── Warnings ──────────────────────────────────────────────────────────────────
 def load_warnings():
     data = warnings_col.find_one({"_id": "global"})
     if data and "warnings" in data:
@@ -68,7 +61,6 @@ def save_warnings(warnings):
 
 WARNINGS = load_warnings()
 
-# ─── Ticket Settings ──────────────────────────────────────────────────────────
 def load_ticket_settings():
     data = ticket_settings_col.find_one({"_id": "global"})
     if data and "settings" in data:
@@ -84,7 +76,6 @@ def save_ticket_settings(settings):
 
 TICKET_SETTINGS = load_ticket_settings()
 
-# ─── Groups ──────────────────────────────────────────────────────────────────
 create_group = app_commands.Group(name="create", description="Commands for creation")
 warning_group = app_commands.Group(name="warning", description="Warning system commands")
 deobf_group = app_commands.Group(name="deobf", description="Deobfuscation commands")
@@ -108,7 +99,6 @@ IGNORED_WARNING_ROLES = set()
 PROTECTED_ROLES = set()
 VERIFIED_ROLE_CACHE = {}
 
-# ─── Utility functions ──────────────────────────────────────────────────────
 def parse_time(time_str):
     if not time_str:
         return None
@@ -151,7 +141,6 @@ def get_color(color_str):
             embed_color = discord.Colour.green()
     return embed_color
 
-# ─── Deobfuscation ────────────────────────────────────────────────────────────
 def extract_url(text):
     patterns = [
         r'game:HttpGet\s*\(\s*["\']([^"\']+)["\']',
@@ -249,6 +238,38 @@ async def deobfuscate_from_url(url):
     except Exception as e:
         return None, f"Fetch Error: {str(e)[:80]}"
 
+async def schedule_auto_purge(channel_id):
+    settings = AUTO_PURGE_SETTINGS.get(channel_id)
+    if not settings:
+        return
+    try:
+        await asyncio.sleep(settings["duration"])
+    except asyncio.CancelledError:
+        return
+    if AUTO_PURGE_SETTINGS.get(channel_id) is not settings:
+        return
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        return
+    try:
+        deleted = await channel.purge(limit=None)
+        purged_count = len(deleted)
+    except Exception:
+        purged_count = 0
+    settings["message_count"] = 0
+    settings["task"] = None
+    embed = discord.Embed(
+        title="🧹 Auto Purge Completed",
+        description=f"All messages is clean 🧹\n**{purged_count}** message(s) purged from {channel.mention} after **{settings['label']}** of inactivity.",
+        color=discord.Colour.green()
+    )
+    embed.set_footer(text="Auto Purge")
+    embed.timestamp = discord.utils.utcnow()
+    try:
+        await channel.send(embed=embed)
+    except Exception:
+        pass
+
 def deobfuscate_lua_code(content):
     match = re.search(r'local ([a-zA-Z0-9_]+)=\{"', content)
     if not match:
@@ -320,40 +341,6 @@ end
     new_script = re.sub(r'getfenv\s+and\s+getfenv\(\)\s+or\s+_ENV', 'MockEnv', new_script)
     return new_script, None
 
-# ─── Auto Purge ──────────────────────────────────────────────────────────────
-async def schedule_auto_purge(channel_id):
-    settings = AUTO_PURGE_SETTINGS.get(channel_id)
-    if not settings:
-        return
-    try:
-        await asyncio.sleep(settings["duration"])
-    except asyncio.CancelledError:
-        return
-    if AUTO_PURGE_SETTINGS.get(channel_id) is not settings:
-        return
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        return
-    try:
-        deleted = await channel.purge(limit=None)
-        purged_count = len(deleted)
-    except Exception:
-        purged_count = 0
-    settings["message_count"] = 0
-    settings["task"] = None
-    embed = discord.Embed(
-        title="🧹 Auto Purge Completed",
-        description=f"All messages is clean 🧹\n**{purged_count}** message(s) purged from {channel.mention} after **{settings['label']}** of inactivity.",
-        color=discord.Colour.green()
-    )
-    embed.set_footer(text="Auto Purge")
-    embed.timestamp = discord.utils.utcnow()
-    try:
-        await channel.send(embed=embed)
-    except Exception:
-        pass
-
-# ─── Events ──────────────────────────────────────────────────────────────────
 @bot.event
 async def on_member_join(member):
     if member.bot:
@@ -568,9 +555,6 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception as e:
                 await interaction.response.send_message(f"❌ An error occurred while creating the ticket: {str(e)}", ephemeral=True)
 
-# ─── Commands ────────────────────────────────────────────────────────────────
-
-# ── Instant Permissions ──
 @instant_group.command(name="permissions", description="Instantly disable message sending permissions for @everyone in ALL channels")
 async def instant_permissions(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -618,7 +602,6 @@ async def instant_permissions(interaction: discord.Interaction):
         )
     await interaction.followup.send(embed=embed)
 
-# ── Add Verify ──
 @add_group.command(name="verify", description="Set up a verification system and auto-role unverified members")
 @app_commands.describe(
     role="Required: The role to give users when they verify",
@@ -734,7 +717,6 @@ async def add_verify(interaction: discord.Interaction, role: discord.Role, enabl
     success_message += f"🔄 **New members will automatically receive the 'Not Verified' role upon joining!**"
     await interaction.followup.send(success_message)
 
-# ── Say ──
 @tree.command(name="say", description="Make the bot say a custom message with working mentions")
 @app_commands.describe(message="Required: The message you want the bot to say")
 async def say_message(interaction: discord.Interaction, message: str):
@@ -744,7 +726,6 @@ async def say_message(interaction: discord.Interaction, message: str):
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=message, allowed_mentions=allowed_mentions)
 
-# ── Warning Mention Toggle ──
 @warning_group.command(name="mention", description="Toggle mention warnings for the highest role On or Off")
 @app_commands.describe(
     status="Select whether to turn mention warnings On or Off",
@@ -813,7 +794,6 @@ async def warning_mention_toggle(interaction: discord.Interaction, status: app_c
             )
     await interaction.response.send_message(embed=embed)
 
-# ── Auto Purge ──
 @auto_purge_group.command(name="messages", description="Auto purge a channel after a period of inactivity")
 @app_commands.describe(
     channel="Required: The channel where auto purge will apply",
@@ -839,7 +819,6 @@ async def auto_purge_messages(interaction: discord.Interaction, channel: discord
     embed.add_field(name="Set By", value=interaction.user.mention, inline=False)
     await interaction.response.send_message(embed=embed)
 
-# ── Create Ticket Panel ──
 @create_group.command(name="ticket", description="Create or update a ticket panel")
 @app_commands.describe(
     admin_role="Required: Role that manages and responds to tickets",
@@ -889,7 +868,6 @@ async def create_ticket_panel(
     target_channel = select_channel
     bot_member = interaction.guild.get_member(bot.user.id)
 
-    # Check permissions in the target channel
     channel_perms = target_channel.permissions_for(bot_member)
     channel_missing_perms = []
     if not channel_perms.view_channel:
@@ -903,7 +881,6 @@ async def create_ticket_panel(
     if not channel_perms.embed_links:
         channel_missing_perms.append("Embed Links")
 
-    # Check permissions in the category
     category_perms = category.permissions_for(bot_member)
     category_missing_perms = []
     if not category_perms.view_channel:
@@ -963,7 +940,6 @@ async def create_ticket_panel(
     panel_description = description if description else "**CREATE A TICKET BELOW 🎟️**"
     embed_color = get_color(color)
 
-    # If update_panel is True, try to remove the old panel message
     existing_settings = TICKET_SETTINGS.get(target_channel.id)
     if update_panel and existing_settings and existing_settings.get("panel_message_id"):
         try:
@@ -1015,7 +991,6 @@ async def create_ticket_panel(
             ephemeral=True
         )
 
-# ── Deobfuscate File ──
 @deobf_group.command(name="file", description="Deobfuscate a Lua script from a file")
 @app_commands.describe(
     file="Upload the obfuscated .lua file to deobfuscate"
@@ -1043,7 +1018,6 @@ async def deobf_file(interaction: discord.Interaction, file: discord.Attachment)
     except Exception as e:
         await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
 
-# ── Deobfuscate Code ──
 @deobf_group.command(name="code", description="Deobfuscate a Lua script from pasted code")
 @app_commands.describe(
     code="Paste the obfuscated Lua code here"
@@ -1071,7 +1045,6 @@ async def deobf_code(interaction: discord.Interaction, code: str):
     except Exception as e:
         await interaction.followup.send(f"❌ Error during deobfuscation: {str(e)}")
 
-# ── Close Ticket Button ──
 async def close_ticket_callback(interaction: discord.Interaction):
     try:
         settings = TICKET_SETTINGS.get(interaction.channel.id)
@@ -1099,7 +1072,6 @@ async def close_ticket_callback(interaction: discord.Interaction):
             ephemeral=True
         )
 
-# ─── NEW COMMAND: Purge Plain Messages ────────────────────────────────────────
 @tree.command(name="purge-plain", description="Delete only plain text messages (no embeds/images/attachments)")
 @app_commands.describe(amount="Number of messages to check (max 1000)")
 async def purge_plain(interaction: discord.Interaction, amount: int):
@@ -1147,7 +1119,6 @@ async def purge_plain(interaction: discord.Interaction, amount: int):
     except Exception as e:
         await interaction.followup.send(f"❌ An error occurred: {str(e)}")
 
-# ── on_message ──
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -1257,7 +1228,6 @@ async def on_message(message):
                         WARNINGS[guild_id][user_id] = 0
                         save_warnings(WARNINGS)
 
-# ── .cmds ──
 @bot.command(name='cmds')
 async def show_commands(ctx):
     if ctx.author.bot:
@@ -1323,7 +1293,6 @@ async def show_commands(ctx):
     except:
         pass
 
-# ── .d ──
 @bot.command(name='d')
 async def deobf_prefix(ctx, *, link: str):
     if ctx.author.bot:
@@ -1344,7 +1313,6 @@ async def deobf_prefix(ctx, *, link: str):
     await ctx.send(file=discord.File(filename))
     os.remove(filename)
 
-# ── .purge ──
 @bot.command(name='purge')
 @commands.has_permissions(manage_messages=True)
 async def purge_messages(ctx, amount: int):
@@ -1373,7 +1341,6 @@ async def purge_error(ctx, error):
     else:
         await ctx.send(f"❌ An error occurred: {str(error)}", delete_after=5)
 
-# ── Create Embed ──
 @create_group.command(name="embed", description="Create a custom embed with an optional plain text message (both in one message)")
 @app_commands.describe(
     description="Required: The embed description text",
@@ -1399,7 +1366,6 @@ async def create_embed(interaction: discord.Interaction, description: str, title
     allowed_mentions = discord.AllowedMentions(users=True, roles=True, everyone=True)
     await interaction.channel.send(content=plain_message if plain_message else None, embed=embed, allowed_mentions=allowed_mentions)
 
-# ── Refresh ──
 @tree.command(name="refresh", description="Force refresh all slash commands and reload ticket settings")
 @app_commands.default_permissions(administrator=True)
 async def refresh_commands(interaction: discord.Interaction):
@@ -1420,8 +1386,6 @@ async def refresh_commands(interaction: discord.Interaction):
             f"❌ Failed to refresh: {str(e)}",
             ephemeral=True
         )
-
-# ── Moderation Commands ──────────────────────────────────────────────────────
 
 @tree.command(name="ban", description="Ban a user from the server")
 @app_commands.describe(user="Required: User to ban", reason="Optional: Reason for the ban")
@@ -1632,7 +1596,6 @@ async def unmute_user(interaction: discord.Interaction, user: discord.Member):
         except:
             pass
 
-# ─── Ready ──────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
@@ -1651,4 +1614,4 @@ if __name__ == "__main__":
         print("Starting Discord bot...")
         bot.run(TOKEN)
     else:
-        print("ERROR: TOKEN environment variable not set!")
+        print("ERROR: TOKEN environment variable not set.")
