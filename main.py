@@ -12,17 +12,20 @@ TOKEN = os.getenv("TOKEN")
 
 MONGODB_URI = "mongodb+srv://xyrielzen16_db_user:saisai1324@panelbot.aubckg7.mongodb.net/?appName=PanelBot"
 
+mongo_client = None
+db = None
+settings_col = None
+logs_col = None
+
 try:
     mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
     mongo_client.admin.command('ping')
+    db = mongo_client.get_database("rblxlua_data")
+    settings_col = db["settings"]
+    logs_col = db["usage_logs"]
     print("Connected to MongoDB successfully!")
 except Exception as e:
     print(f"MongoDB Connection Error: {str(e)}")
-    mongo_client = None
-
-db = mongo_client.get_database("rblxlua_data") if mongo_client else None
-settings_col = db["settings"] if db else None
-logs_col = db["usage_logs"] if db else None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -35,7 +38,7 @@ COMMANDS_LIST = """
 `.env <link/loadstring>` - Bypass anti-envlog → Run envlog scan → Send full report
 `.cmds` - Show this command list
 `.db status` - Check MongoDB connection status
-`.db clear` - Clear stored data (admin only)
+`.db clear` - Clear stored data (owner only)
 """
 
 async def fetch_content(url: str) -> str:
@@ -101,7 +104,7 @@ async def envlog_scan(code: str) -> str:
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    if db:
+    if db is not None:
         print(f"Database: {db.name} connected")
 
 @bot.group(name="db", invoke_without_command=True)
@@ -110,7 +113,7 @@ async def db_group(ctx):
 
 @db_group.command(name="status")
 async def db_status(ctx):
-    if mongo_client:
+    if mongo_client is not None and db is not None:
         await ctx.send("✅ MongoDB is connected and working properly")
     else:
         await ctx.send("❌ MongoDB connection failed")
@@ -118,7 +121,7 @@ async def db_status(ctx):
 @db_group.command(name="clear")
 @commands.is_owner()
 async def db_clear(ctx):
-    if db:
+    if settings_col is not None and logs_col is not None:
         settings_col.delete_many({})
         logs_col.delete_many({})
         await ctx.send("✅ All database data cleared")
@@ -144,7 +147,7 @@ async def deobf_command(ctx, *, link: str):
         result = detect_and_deobf(code)
         file = discord.File(io.StringIO(result), filename="deobfuscated_result.lua")
         await ctx.send(f"✅ Done: `{url}`", file=file)
-        if logs_col:
+        if logs_col is not None:
             logs_col.insert_one({
                 "user_id": ctx.author.id,
                 "type": "deobfuscate",
@@ -165,7 +168,7 @@ async def fetch_command(ctx, *, link: str):
         code = await fetch_content(url)
         file = discord.File(io.StringIO(code), filename="raw_fetched_source.lua")
         await ctx.send(f"✅ Done: `{url}`", file=file)
-        if logs_col:
+        if logs_col is not None:
             logs_col.insert_one({
                 "user_id": ctx.author.id,
                 "type": "fetch",
@@ -187,7 +190,7 @@ async def envlog_command(ctx, *, link: str):
         result = await envlog_scan(code)
         file = discord.File(io.StringIO(result), filename="envlog_analysis.lua")
         await ctx.send(f"✅ Done: `{url}`", file=file)
-        if logs_col:
+        if logs_col is not None:
             logs_col.insert_one({
                 "user_id": ctx.author.id,
                 "type": "envscan",
