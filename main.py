@@ -78,6 +78,7 @@ async def block_dms(ctx):
 
 @bot.command(name="access")
 async def access_command(ctx):
+    await ctx.message.delete()
     embed = discord.Embed(
         title="🔒 Access Premium Dumper Bot",
         description=(
@@ -90,7 +91,7 @@ async def access_command(ctx):
     view = discord.ui.View()
     view.add_item(discord.ui.Button(
         label="Verify License & Get Access",
-        url="https://your-website.com/verify"
+        url="https://redeem-system.rblxlua.workers.dev/"
     ))
     await ctx.send(embed=embed, view=view)
 
@@ -103,18 +104,15 @@ async def key_command(ctx, *, user: discord.User = None):
 
     user_id = str(user.id)
 
-    # Check if this user already has the premium role
     member = ctx.guild.get_member(user.id)
     if member and PREMIUM_ROLE_ID in [role.id for role in member.roles]:
         await ctx.send(f"⚠️ {user.mention} already has the Premium role.")
         return
 
-    # Generate a new unique key
     key = generate_license_key()
     while licenses_col.find_one({"_id": key}):
         key = generate_license_key()
 
-    # Insert into DB as used immediately
     licenses_col.insert_one({
         "_id": key,
         "used": True,
@@ -123,7 +121,6 @@ async def key_command(ctx, *, user: discord.User = None):
         "created_at": datetime.utcnow()
     })
 
-    # Assign the role
     try:
         await member.add_roles(discord.Object(id=PREMIUM_ROLE_ID), reason="License key granted by admin")
         success = True
@@ -131,7 +128,6 @@ async def key_command(ctx, *, user: discord.User = None):
         success = False
         print(f"Failed to assign role: {e}")
 
-    # Log in users_col
     users_col.insert_one({
         "user_id": user_id,
         "license_key": key,
