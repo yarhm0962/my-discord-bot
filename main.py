@@ -1,9 +1,10 @@
 import os
+import sys
 import secrets
 import string
 from datetime import datetime
 from threading import Thread
-from flask import Flask, request, redirect, render_template_string, session, url_for
+from flask import Flask, request, render_template_string
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -11,6 +12,13 @@ import pymongo
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import requests
+
+REQUIRED_ENV = ["DISCORD_TOKEN", "MONGODB_URI", "GUILD_ID", "PREMIUM_ROLE_ID"]
+missing = [var for var in REQUIRED_ENV if not os.getenv(var)]
+if missing:
+    print(f"❌ Missing required environment variables: {', '.join(missing)}")
+    print("Please set them and restart.")
+    sys.exit(1)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
