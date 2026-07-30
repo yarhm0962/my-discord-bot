@@ -13,18 +13,24 @@ from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 import requests
 
-REQUIRED_ENV = ["DISCORD_TOKEN", "MONGODB_URI", "GUILD_ID", "PREMIUM_ROLE_ID"]
-missing = [var for var in REQUIRED_ENV if not os.getenv(var)]
-if missing:
-    print(f"❌ Missing required environment variables: {', '.join(missing)}")
-    print("Please set them and restart.")
+TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
+if not TOKEN:
+    print("❌ Missing DISCORD_TOKEN or TOKEN environment variable.")
     sys.exit(1)
 
-TOKEN = os.getenv("DISCORD_TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-PREMIUM_ROLE_ID = int(os.getenv("PREMIUM_ROLE_ID"))
-BOT_TOKEN = TOKEN
+if not MONGODB_URI:
+    print("❌ Missing MONGODB_URI environment variable.")
+    sys.exit(1)
+
+GUILD_ID = os.getenv("GUILD_ID")
+PREMIUM_ROLE_ID = os.getenv("PREMIUM_ROLE_ID")
+if not GUILD_ID or not PREMIUM_ROLE_ID:
+    print("❌ Missing GUILD_ID or PREMIUM_ROLE_ID environment variables.")
+    sys.exit(1)
+
+GUILD_ID = int(GUILD_ID)
+PREMIUM_ROLE_ID = int(PREMIUM_ROLE_ID)
 
 flask_app = Flask(__name__)
 flask_app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
@@ -337,7 +343,7 @@ def verify_license():
         {"$set": {"used": True, "used_by": user_id, "used_at": datetime.utcnow()}}
     )
 
-    headers = {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     add_role_url = f"https://discord.com/api/guilds/{GUILD_ID}/members/{user_id}/roles/{PREMIUM_ROLE_ID}"
     resp = requests.put(add_role_url, headers=headers)
 
