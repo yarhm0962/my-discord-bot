@@ -6,7 +6,6 @@ from datetime import datetime
 from threading import Thread
 from flask import Flask, request, render_template_string
 import discord
-from discord import app_commands
 from discord.ext import commands
 import pymongo
 from pymongo.mongo_client import MongoClient
@@ -42,8 +41,7 @@ users_col = db["users"]
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix=".", intents=intents)
-tree = bot.tree
+bot = commands.Bot(command_prefix="$", intents=intents)
 
 def generate_license_key():
     pattern = ['L','L','N','N','L','N','L','L','N','L']
@@ -52,13 +50,34 @@ def generate_license_key():
         chars.append(secrets.choice(string.ascii_uppercase if p == 'L' else string.digits))
     return ''.join(chars)
 
-def is_admin(interaction: discord.Interaction) -> bool:
-    if interaction.user.id == bot.application.owner.id:
+def is_admin(ctx):
+    if ctx.author.id == bot.application.owner.id:
         return True
-    return interaction.permissions.administrator
+    return ctx.author.guild_permissions.administrator
 
-@tree.command(name="access", description="Get premium access with a license key")
-async def access_command(interaction: discord.Interaction):
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="$access | $key"))
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.NotOwner):
+        await ctx.send("❌ You don't have permission to use this command.", delete_after=5)
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid argument. Please provide a valid user mention or ID.", delete_after=5)
+    else:
+        await ctx.send(f"❌ An error occurred: {error}", delete_after=5)
+
+@bot.check
+async def block_dms(ctx):
+    if ctx.guild is None:
+        await ctx.send("⚠️ Please upgrade to premium to access private CMDS")
+        return False
+    return True
+
+@bot.command(name="access")
+async def access_command(ctx):
     embed = discord.Embed(
         title="🔒 Access Premium Dumper Bot",
         description=(
@@ -73,32 +92,66 @@ async def access_command(interaction: discord.Interaction):
         label="Verify License & Get Access",
         url="https://your-website.com/verify"
     ))
-    await interaction.response.send_message(embed=embed, view=view)
+    await ctx.send(embed=embed, view=view)
 
-@tree.command(name="license_key", description="Generate a new premium license key (admin only)")
-@app_commands.default_permissions(administrator=True)
-async def license_key_command(interaction: discord.Interaction):
-    if not is_admin(interaction):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+@bot.command(name="key")
+@commands.has_permissions(administrator=True)
+async def key_command(ctx, *, user: discord.User = None):
+    if user is None:
+        await ctx.send("❌ Please mention a user or provide their ID.\nUsage: `$key @user` or `$key 123456789012345678`")
         return
+
+    user_id = str(user.id)
+
+    # Check if this user already has the premium role
+    member = ctx.guild.get_member(user.id)
+    if member and PREMIUM_ROLE_ID in [role.id for role in member.roles]:
+        await ctx.send(f"⚠️ {user.mention} already has the Premium role.")
+        return
+
+    # Generate a new unique key
     key = generate_license_key()
     while licenses_col.find_one({"_id": key}):
         key = generate_license_key()
+
+    # Insert into DB as used immediately
     licenses_col.insert_one({
         "_id": key,
-        "used": False,
-        "used_by": None,
-        "used_at": None,
+        "used": True,
+        "used_by": user_id,
+        "used_at": datetime.utcnow(),
         "created_at": datetime.utcnow()
     })
-    await interaction.response.send_message(f"✅ New license key generated:\n`{key}`", ephemeral=True)
 
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    await tree.sync(guild=discord.Object(id=GUILD_ID))
-    print("✅ Slash commands synced")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="/access | /license_key"))
+    # Assign the role
+    try:
+        await member.add_roles(discord.Object(id=PREMIUM_ROLE_ID), reason="License key granted by admin")
+        success = True
+    except Exception as e:
+        success = False
+        print(f"Failed to assign role: {e}")
+
+    # Log in users_col
+    users_col.insert_one({
+        "user_id": user_id,
+        "license_key": key,
+        "granted_at": datetime.utcnow(),
+        "granted_by": ctx.author.id
+    })
+
+    if success:
+        await ctx.send(f"✅ Premium role granted to {user.mention}.\nLicense key: `{key}`")
+    else:
+        await ctx.send(f"⚠️ License key generated: `{key}` but role could not be assigned automatically. Please assign manually.")
+
+@key_command.error
+async def key_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You need administrator permissions to use this command.", delete_after=5)
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid user. Please mention a valid user or provide their ID.", delete_after=5)
+    else:
+        await ctx.send(f"❌ Error: {error}", delete_after=5)
 
 VERIFY_HTML = """
 <!DOCTYPE html>
