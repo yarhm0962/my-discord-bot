@@ -72,6 +72,14 @@ async def on_command_error(ctx, error):
 @bot.check
 async def block_dms(ctx):
     if ctx.guild is None:
+        try:
+            guild = bot.get_guild(GUILD_ID)
+            if guild:
+                member = guild.get_member(ctx.author.id)
+                if member and PREMIUM_ROLE_ID in [role.id for role in member.roles]:
+                    return True
+        except:
+            pass
         await ctx.send("⚠️ Please upgrade to premium to access private CMDS")
         return False
     return True
@@ -91,7 +99,7 @@ async def access_command(ctx):
     view = discord.ui.View()
     view.add_item(discord.ui.Button(
         label="Verify License & Get Access",
-        url="https://redeem-system.rblxlua.workers.dev/"
+        url="https://redeem-system.netlify.app/"
     ))
     await ctx.send(embed=embed, view=view)
 
@@ -99,14 +107,14 @@ async def access_command(ctx):
 @commands.has_permissions(administrator=True)
 async def key_command(ctx, *, user: discord.User = None):
     if user is None:
-        await ctx.send("❌ Please mention a user or provide their ID.\nUsage: `$key @user` or `$key 123456789012345678`")
+        await ctx.send("❌ Please mention a user or provide their ID.\nUsage: `$key @user` or `$key 123456789012345678`", delete_after=10)
         return
 
     user_id = str(user.id)
 
     member = ctx.guild.get_member(user.id)
     if member and PREMIUM_ROLE_ID in [role.id for role in member.roles]:
-        await ctx.send(f"⚠️ {user.mention} already has the Premium role.")
+        await ctx.send(f"⚠️ {user.mention} already has the Premium role.", delete_after=10)
         return
 
     key = generate_license_key()
@@ -135,10 +143,12 @@ async def key_command(ctx, *, user: discord.User = None):
         "granted_by": ctx.author.id
     })
 
-    if success:
-        await ctx.send(f"✅ Premium role granted to {user.mention}.\nLicense key: `{key}`")
-    else:
-        await ctx.send(f"⚠️ License key generated: `{key}` but role could not be assigned automatically. Please assign manually.")
+    # Send the key via DM to the command author (ephemeral)
+    try:
+        await ctx.author.send(f"✅ License key generated for {user.display_name}:\n`{key}`\nRole assigned: {'✅' if success else '❌'}")
+        await ctx.send("✅ License key and result sent via DM.", delete_after=10)
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ Could not DM you. Here is the key: `{key}`\nRole assigned: {'✅' if success else '❌'}", delete_after=30)
 
 @key_command.error
 async def key_error(ctx, error):
