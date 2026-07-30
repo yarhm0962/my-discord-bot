@@ -1,192 +1,213 @@
 import os
+import secrets
+import string
+from datetime import datetime
+from threading import Thread
+from flask import Flask, request, redirect, render_template_string, session, url_for
 import discord
+from discord import app_commands
 from discord.ext import commands
-import aiohttp
-import re
-import io
 import pymongo
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+import requests
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
+GUILD_ID = int(os.getenv("GUILD_ID"))
+PREMIUM_ROLE_ID = int(os.getenv("PREMIUM_ROLE_ID"))
+CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
+CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("REDIRECT_URI")
+BOT_TOKEN = TOKEN
 
-mongo_client = None
-db = None
-settings_col = None
-logs_col = None
+flask_app = Flask(__name__)
+flask_app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
 
-try:
-    mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
-    mongo_client.admin.command('ping')
-    db = mongo_client["rblxlua_data"]
-    settings_col = db["settings"]
-    logs_col = db["usage_logs"]
-    print("✅ MongoDB Connected Successfully")
-except Exception as e:
-    print(f"❌ MongoDB Error: {str(e)}")
+mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
+db = mongo_client["premium_bot"]
+licenses_col = db["licenses"]
+users_col = db["users"]
 
 intents = discord.Intents.default()
 intents.message_content = True
+bot = commands.Bot(command_prefix=".", intents=intents)
+tree = bot.tree
 
-bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
+def generate_license_key():
+    pattern = ['L','L','N','N','L','N','L','L','N','L']
+    chars = []
+    for p in pattern:
+        chars.append(secrets.choice(string.ascii_uppercase if p == 'L' else string.digits))
+    return ''.join(chars)
 
-COMMANDS_LIST = """
-`.l <link/loadstring>` - Detect protection → Deobfuscate → Send file
-`.get <link/loadstring>` - Fetch raw full source → Send file
-`.env <link/loadstring>` - Scan anti-log & bypass → Send report
-`.cmds` - Show this command list
-`.db status` - Check database connection
-`.db clear` - Clear all stored data (owner only)
-"""
+def is_admin(interaction: discord.Interaction) -> bool:
+    if interaction.user.id == bot.application.owner.id:
+        return True
+    return interaction.permissions.administrator
 
-async def fetch_content(url: str) -> str:
-    async with aiohttp.ClientSession() as session:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.1 Safari/537.36",
-            "Referer": "https://roblox.com/"
-        }
-        async with session.get(url, headers=headers) as resp:
-            return await resp.text()
+@tree.command(name="access", description="Get premium access with a license key")
+async def access_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔒 Access Premium Dumper Bot",
+        description=(
+            "Unlock full access to all premium features including live game exploration, "
+            "advanced dumper tools, anti-deobfuscation bypass, and priority updates. "
+            "Verify your license below to get started."
+        ),
+        color=0x2c3e99
+    )
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Verify License & Get Access",
+        url="https://your-website.com/verify"
+    ))
+    await interaction.response.send_message(embed=embed, view=view)
 
-def detect_and_deobf(code: str) -> str:
-    result = []
-    if "Lunr" in code or ("return(function" in code and "local L={" in code):
-        result.append("[✓] Detected: Lunr Obfuscation")
-        code = re.sub(r'-- This file was protected using Lunr.*?\n', '', code, flags=re.DOTALL)
-    if "Luraph" in code or ("bxor" in code and "string.gsub" in code):
-        result.append("[✓] Detected: Luraph / Custom XOR")
-    if "Prometheus" in code or "local _=getgenv" in code:
-        result.append("[✓] Detected: Prometheus / Control Flow")
-    if code.isascii() and len(code) % 4 == 0 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" for c in code.rstrip("=")):
-        result.append("[✓] Detected: Raw Base64")
-    result.append("\n=== RESULT ===")
-    result.append(code)
-    return "\n".join(result)
-
-async def envlog_scan(code: str) -> str:
-    report = ["=== ENVIRONMENT LOGGER SCAN ==="]
-    bypassed = code
-    checks = [
-        ("_ENVLOG", "Anti-Envlog Variable"),
-        ("_GALACTIC", "Anti-logger Marker"),
-        ("debug.getupvalue", "Debug Interception"),
-        ("Kick.*tampered", "Kick On Tamper"),
-        ("loadstring.*~=", "Hook Detection"),
-        ("while true do end", "Infinite Loop Freeze"),
-        ("os.exit", "Force Close Script")
-    ]
-    found = []
-    for pattern, desc in checks:
-        if re.search(pattern, bypassed):
-            found.append(f"[!] FOUND: {desc}")
-            bypassed = re.sub(pattern, f"-- BYPASSED {pattern}", bypassed)
-    if found:
-        report.extend(found)
-        report.append("\n[+] All markers commented out")
-    else:
-        report.append("[✓] No strong anti-log found")
-    report.append("\n=== SCANNED CODE ===")
-    report.append(bypassed)
-    return "\n".join(report)
+@tree.command(name="license_key", description="Generate a new premium license key (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def license_key_command(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        return
+    key = generate_license_key()
+    while licenses_col.find_one({"_id": key}):
+        key = generate_license_key()
+    licenses_col.insert_one({
+        "_id": key,
+        "used": False,
+        "used_by": None,
+        "used_at": None,
+        "created_at": datetime.utcnow()
+    })
+    await interaction.response.send_message(f"✅ New license key generated:\n`{key}`", ephemeral=True)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as: {bot.user}")
-    if db is not None:
-        print(f"✅ Database Ready: {db.name}")
+    print(f"✅ Logged in as {bot.user}")
+    await tree.sync(guild=discord.Object(id=GUILD_ID))
+    print("✅ Slash commands synced")
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="/access | /license_key"))
 
-@bot.group(name="db", invoke_without_command=True)
-async def db_group(ctx):
-    await ctx.send("Use `.db status` or `.db clear`")
+VERIFY_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>License Verification</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #1a1a2e; color: #eee; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: #16213e; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); width: 400px; text-align: center; }
+        h1 { color: #2c3e99; }
+        input { width: 90%; padding: 12px; margin: 10px 0; border: none; border-radius: 6px; background: #0f3460; color: white; font-size: 16px; }
+        button { background: #2c3e99; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #1e2a6b; }
+        .error { color: #ff6b6b; margin-top: 10px; }
+        .success { color: #51cf66; margin-top: 10px; }
+        .login-btn { background: #5865F2; margin-top: 10px; display: inline-block; padding: 12px 24px; border-radius: 6px; text-decoration: none; color: white; }
+        .login-btn:hover { background: #4752c4; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% if user %}
+            <h2>Welcome, {{ user.username }}!</h2>
+            <form method="POST">
+                <input type="text" name="license_key" placeholder="Enter your license key" required>
+                <button type="submit">Verify</button>
+            </form>
+            {% if error %}
+                <div class="error">{{ error }}</div>
+            {% endif %}
+            {% if success %}
+                <div class="success">{{ success }}</div>
+            {% endif %}
+        {% else %}
+            <h1>🔒 Premium Access</h1>
+            <p>Login with Discord to verify your license</p>
+            <a href="{{ login_url }}" class="login-btn">Login with Discord</a>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
-@db_group.command(name="status")
-async def db_status(ctx):
-    if mongo_client is not None and db is not None:
-        await ctx.send("✅ MongoDB is connected and working")
+@flask_app.route("/verify")
+def verify_page():
+    user = session.get("user")
+    if not user:
+        params = {
+            "client_id": CLIENT_ID,
+            "redirect_uri": REDIRECT_URI,
+            "response_type": "code",
+            "scope": "identify guilds.join"
+        }
+        login_url = "https://discord.com/oauth2/authorize?" + "&".join([f"{k}={v}" for k, v in params.items()])
+        return render_template_string(VERIFY_HTML, user=None, login_url=login_url)
+    return render_template_string(VERIFY_HTML, user=user, error=None, success=None)
+
+@flask_app.route("/callback")
+def callback():
+    code = request.args.get("code")
+    if not code:
+        return "No code provided", 400
+    data = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    resp = requests.post("https://discord.com/api/oauth2/token", data=data, headers=headers)
+    if resp.status_code != 200:
+        return "Failed to get token", 400
+    token_data = resp.json()
+    access_token = token_data["access_token"]
+    user_resp = requests.get("https://discord.com/api/users/@me", headers={"Authorization": f"Bearer {access_token}"})
+    if user_resp.status_code != 200:
+        return "Failed to get user info", 400
+    user_data = user_resp.json()
+    session["user"] = user_data
+    return redirect(url_for("verify_page"))
+
+@flask_app.route("/verify", methods=["POST"])
+def verify_license():
+    user = session.get("user")
+    if not user:
+        return redirect(url_for("verify_page"))
+    license_key = request.form.get("license_key", "").strip().upper()
+    if not license_key:
+        return render_template_string(VERIFY_HTML, user=user, error="Please enter a license key.", success=None)
+    doc = licenses_col.find_one({"_id": license_key})
+    if not doc:
+        return render_template_string(VERIFY_HTML, user=user, error="Invalid license key.", success=None)
+    if doc["used"]:
+        return render_template_string(VERIFY_HTML, user=user, error="This license has already been used.", success=None)
+    licenses_col.update_one(
+        {"_id": license_key},
+        {"$set": {"used": True, "used_by": user["id"], "used_at": datetime.utcnow()}}
+    )
+    headers = {"Authorization": f"Bot {BOT_TOKEN}", "Content-Type": "application/json"}
+    guild_id = GUILD_ID
+    user_id = user["id"]
+    role_id = PREMIUM_ROLE_ID
+    add_role_url = f"https://discord.com/api/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
+    resp = requests.put(add_role_url, headers=headers)
+    if resp.status_code in (200, 204):
+        success_msg = "✅ License verified! You have been granted the Premium role."
     else:
-        await ctx.send("❌ Not connected to database")
+        success_msg = "⚠️ License verified but role could not be assigned automatically. Please contact staff."
+    users_col.insert_one({
+        "user_id": user["id"],
+        "username": user["username"],
+        "license_key": license_key,
+        "granted_at": datetime.utcnow()
+    })
+    return render_template_string(VERIFY_HTML, user=user, error=None, success=success_msg)
 
-@db_group.command(name="clear")
-@commands.is_owner()
-async def db_clear(ctx):
-    if settings_col is not None and logs_col is not None:
-        settings_col.delete_many({})
-        logs_col.delete_many({})
-        await ctx.send("✅ All database data cleared")
-    else:
-        await ctx.send("❌ Database not available")
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=10000, debug=False)
 
-@bot.command(name="cmds")
-async def show_commands(ctx):
-    emb = discord.Embed(title="RblXLua Tool Commands", color=0x2b2d31)
-    emb.add_field(name="Available Commands", value=COMMANDS_LIST, inline=False)
-    emb.set_footer(text="All results sent as downloadable files")
-    await ctx.send(embed=emb)
-
-@bot.command(name="l")
-async def deobf_command(ctx, *, link: str):
-    await ctx.send("Processing obfuscation detection...")
-    try:
-        url_match = re.search(r'https?://[^\s"\'<>)]+', link)
-        if not url_match:
-            return await ctx.send("❌ No valid URL found")
-        url = url_match.group(0)
-        code = await fetch_content(url)
-        result = detect_and_deobf(code)
-        file = discord.File(io.StringIO(result), filename="deobfuscated_result.lua")
-        await ctx.send(f"✅ Finished: `{url}`", file=file)
-        if logs_col is not None:
-            logs_col.insert_one({
-                "user_id": ctx.author.id,
-                "action": "deobfuscate",
-                "url": url,
-                "time": discord.utils.utcnow()
-            })
-    except Exception as e:
-        await ctx.send(f"❌ Error: {str(e)[:120]}")
-
-@bot.command(name="get")
-async def fetch_command(ctx, *, link: str):
-    await ctx.send("Fetching full source code...")
-    try:
-        url_match = re.search(r'https?://[^\s"\'<>)]+', link)
-        if not url_match:
-            return await ctx.send("❌ No valid URL found")
-        url = url_match.group(0)
-        code = await fetch_content(url)
-        file = discord.File(io.StringIO(code), filename="raw_fetched_source.lua")
-        await ctx.send(f"✅ Finished: `{url}`", file=file)
-        if logs_col is not None:
-            logs_col.insert_one({
-                "user_id": ctx.author.id,
-                "action": "fetch",
-                "url": url,
-                "time": discord.utils.utcnow()
-            })
-    except Exception as e:
-        await ctx.send(f"❌ Error: {str(e)[:120]}")
-
-@bot.command(name="env")
-async def envlog_command(ctx, *, link: str):
-    await ctx.send("Scanning anti-environment logger...")
-    try:
-        url_match = re.search(r'https?://[^\s"\'<>)]+', link)
-        if not url_match:
-            return await ctx.send("❌ No valid URL found")
-        url = url_match.group(0)
-        code = await fetch_content(url)
-        result = await envlog_scan(code)
-        file = discord.File(io.StringIO(result), filename="envlog_analysis.lua")
-        await ctx.send(f"✅ Finished: `{url}`", file=file)
-        if logs_col is not None:
-            logs_col.insert_one({
-                "user_id": ctx.author.id,
-                "action": "envscan",
-                "url": url,
-                "time": discord.utils.utcnow()
-            })
-    except Exception as e:
-        await ctx.send(f"❌ Error: {str(e)[:120]}")
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    Thread(target=run_flask, daemon=True).start()
+    bot.run(TOKEN)
