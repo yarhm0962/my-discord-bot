@@ -5,6 +5,7 @@ import string
 from datetime import datetime
 from threading import Thread
 from flask import Flask, request, render_template_string
+from flask_cors import CORS
 import discord
 from discord.ext import commands
 import pymongo
@@ -33,6 +34,7 @@ PREMIUM_ROLE_ID = int(PREMIUM_ROLE_ID)
 
 flask_app = Flask(__name__)
 flask_app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
+CORS(flask_app, origins=["https://redeem-system.netlify.app", "http://localhost:3000"])  # allow your Netlify domain
 
 mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi('1'))
 db = mongo_client["premium_bot"]
@@ -121,6 +123,7 @@ async def key_command(ctx, *, user: discord.User = None):
     while licenses_col.find_one({"_id": key}):
         key = generate_license_key()
 
+    # Save key as used immediately (so it can be used only once)
     licenses_col.insert_one({
         "_id": key,
         "used": True,
@@ -143,7 +146,6 @@ async def key_command(ctx, *, user: discord.User = None):
         "granted_by": ctx.author.id
     })
 
-    # Send the key via DM to the command author (ephemeral)
     try:
         await ctx.author.send(f"✅ License key generated for {user.display_name}:\n`{key}`\nRole assigned: {'✅' if success else '❌'}")
         await ctx.send("✅ License key and result sent via DM.", delete_after=10)
@@ -159,6 +161,7 @@ async def key_error(ctx, error):
     else:
         await ctx.send(f"❌ Error: {error}", delete_after=5)
 
+# ---------- Flask routes ----------
 VERIFY_HTML = """
 <!DOCTYPE html>
 <html>
@@ -189,124 +192,32 @@ VERIFY_HTML = """
             box-shadow: 0 0 40px rgba(44, 62, 153, 0.4);
             text-align: center;
         }
-        .lock-icon {
-            font-size: 52px;
-            margin-bottom: 12px;
-            display: block;
-        }
-        h1 {
-            font-size: 22px;
-            color: #2c3e99;
-            text-shadow: 0 0 12px #2c3e99;
-            letter-spacing: 2px;
-            margin-bottom: 10px;
-        }
-        .sub {
-            font-size: 11px;
-            color: #8892b0;
-            margin-bottom: 35px;
-            line-height: 1.8;
-        }
-        .form-group {
-            margin-bottom: 20px;
-            text-align: left;
-        }
-        .form-group label {
-            font-size: 10px;
-            display: block;
-            margin-bottom: 8px;
-            color: #8892b0;
-            letter-spacing: 1px;
-        }
+        .lock-icon { font-size:52px; margin-bottom:12px; display:block; }
+        h1 { font-size:22px; color:#2c3e99; text-shadow:0 0 12px #2c3e99; letter-spacing:2px; margin-bottom:10px; }
+        .sub { font-size:11px; color:#8892b0; margin-bottom:35px; line-height:1.8; }
+        .form-group { margin-bottom:20px; text-align:left; }
+        .form-group label { font-size:10px; display:block; margin-bottom:8px; color:#8892b0; letter-spacing:1px; }
         input {
-            width: 100%;
-            padding: 14px 16px;
-            font-family: 'Press Start 2P', monospace;
-            font-size: 14px;
-            background: #0f0f23;
-            border: 2px solid #2c3e99;
-            border-radius: 8px;
-            color: #e0e0e0;
-            outline: none;
-            transition: 0.2s;
-            text-align: center;
-            letter-spacing: 2px;
+            width:100%; padding:14px 16px; font-family:inherit; font-size:14px;
+            background:#0f0f23; border:2px solid #2c3e99; border-radius:8px; color:#e0e0e0;
+            outline:none; transition:0.2s; text-align:center; letter-spacing:2px;
         }
-        input:focus {
-            border-color: #6b8cff;
-            box-shadow: 0 0 20px rgba(44, 62, 153, 0.5);
-        }
-        input.user-id {
-            text-align: left;
-            letter-spacing: 0;
-        }
+        input:focus { border-color:#6b8cff; box-shadow:0 0 20px rgba(44,62,153,0.5); }
+        input.user-id { text-align:left; letter-spacing:0; }
         button {
-            width: 100%;
-            padding: 16px;
-            margin-top: 8px;
-            font-family: 'Press Start 2P', monospace;
-            font-size: 14px;
-            background: #2c3e99;
-            border: none;
-            border-radius: 8px;
-            color: #fff;
-            cursor: pointer;
-            transition: 0.2s;
-            letter-spacing: 1px;
+            width:100%; padding:16px; margin-top:8px; font-family:inherit; font-size:14px;
+            background:#2c3e99; border:none; border-radius:8px; color:#fff; cursor:pointer;
+            transition:0.2s; letter-spacing:1px;
         }
-        button:hover {
-            background: #1e2a6b;
-            box-shadow: 0 0 20px rgba(44, 62, 153, 0.6);
-        }
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .message {
-            margin-top: 22px;
-            font-size: 11px;
-            line-height: 1.6;
-            padding: 12px;
-            border-radius: 6px;
-            display: none;
-        }
-        .message.error {
-            display: block;
-            color: #ff6b6b;
-            border: 1px solid #ff6b6b;
-            background: rgba(255, 107, 107, 0.1);
-        }
-        .message.success {
-            display: block;
-            color: #51cf66;
-            border: 1px solid #51cf66;
-            background: rgba(81, 207, 102, 0.1);
-        }
-        .footer {
-            margin-top: 30px;
-            font-size: 8px;
-            color: #4a4a6a;
-        }
-        .loader {
-            display: none;
-            margin: 12px auto;
-            width: 30px;
-            height: 30px;
-            border: 4px solid #2c3e99;
-            border-top-color: #6b8cff;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .hint {
-            font-size: 8px;
-            color: #4a6a8a;
-            margin-top: 6px;
-            text-align: left;
-            padding-left: 4px;
-        }
+        button:hover { background:#1e2a6b; box-shadow:0 0 20px rgba(44,62,153,0.6); }
+        button:disabled { opacity:0.5; cursor:not-allowed; }
+        .message { margin-top:22px; font-size:11px; line-height:1.6; padding:12px; border-radius:6px; display:none; }
+        .message.error { display:block; color:#ff6b6b; border:1px solid #ff6b6b; background:rgba(255,107,107,0.1); }
+        .message.success { display:block; color:#51cf66; border:1px solid #51cf66; background:rgba(81,207,102,0.1); }
+        .footer { margin-top:30px; font-size:8px; color:#4a4a6a; }
+        .loader { display:none; margin:12px auto; width:30px; height:30px; border:4px solid #2c3e99; border-top-color:#6b8cff; border-radius:50%; animation:spin 1s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .hint { font-size:8px; color:#4a6a8a; margin-top:6px; text-align:left; padding-left:4px; }
     </style>
 </head>
 <body>
@@ -314,8 +225,7 @@ VERIFY_HTML = """
         <span class="lock-icon">🔒</span>
         <h1>PREMIUM ACCESS</h1>
         <p class="sub">Enter your license key and your Discord User ID<br>to activate premium features.</p>
-
-        <form id="verifyForm" method="POST" action="/verify">
+        <form method="POST" action="/verify">
             <div class="form-group">
                 <label for="license_key">License Key</label>
                 <input type="text" name="license_key" id="license_key" placeholder="LLNNLNNLLN" required autocomplete="off" maxlength="10" style="text-transform:uppercase;">
@@ -323,10 +233,9 @@ VERIFY_HTML = """
             <div class="form-group">
                 <label for="user_id">Discord User ID</label>
                 <input type="text" name="user_id" id="user_id" class="user-id" placeholder="123456789012345678" required autocomplete="off">
-                <div class="hint">Find your ID by enabling Developer Mode in Discord → Right‑click your profile → Copy ID</div>
+                <div class="hint">Enable Developer Mode → Right‑click your profile → Copy ID</div>
             </div>
             <button type="submit" id="submitBtn">ACTIVATE PREMIUM</button>
-            <div class="loader" id="loader"></div>
         </form>
         <div id="message" class="message">
             {% if error %}
@@ -337,40 +246,11 @@ VERIFY_HTML = """
         </div>
         <div class="footer">© 2026 RblXLua Premium</div>
     </div>
-
     <script>
-        (function() {
-            var form = document.getElementById('verifyForm');
-            var submitBtn = document.getElementById('submitBtn');
-            var loader = document.getElementById('loader');
-            var msgDiv = document.getElementById('message');
-            var keyInput = document.getElementById('license_key');
-            var userIdInput = document.getElementById('user_id');
-
-            if (keyInput) {
-                keyInput.addEventListener('input', function() {
-                    this.value = this.value.toUpperCase();
-                });
-            }
-
-            if (form) {
-                form.addEventListener('submit', function(e) {
-                    loader.style.display = 'block';
-                    submitBtn.disabled = true;
-                    msgDiv.className = 'message';
-                    msgDiv.textContent = '';
-                });
-            }
-
-            var errorMsg = document.querySelector('.message .error');
-            var successMsg = document.querySelector('.message .success');
-            if (errorMsg || successMsg) {
-                if (msgDiv) {
-                    msgDiv.className = 'message ' + (errorMsg ? 'error' : 'success');
-                    msgDiv.textContent = errorMsg ? errorMsg.textContent : successMsg.textContent;
-                }
-            }
-        })();
+        // Auto‑uppercase license key
+        document.getElementById('license_key').addEventListener('input', function(e) {
+            this.value = this.value.toUpperCase();
+        });
     </script>
 </body>
 </html>
@@ -397,11 +277,13 @@ def verify_license():
     if doc["used"]:
         return render_template_string(VERIFY_HTML, error="This license has already been used.", success=None)
 
+    # Mark as used
     licenses_col.update_one(
         {"_id": license_key},
         {"$set": {"used": True, "used_by": user_id, "used_at": datetime.utcnow()}}
     )
 
+    # Assign role via Discord API
     headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     add_role_url = f"https://discord.com/api/guilds/{GUILD_ID}/members/{user_id}/roles/{PREMIUM_ROLE_ID}"
     resp = requests.put(add_role_url, headers=headers)
@@ -418,6 +300,10 @@ def verify_license():
         success_msg = f"⚠️ License verified but role could not be assigned automatically. Please contact staff. (User ID: {user_id})"
 
     return render_template_string(VERIFY_HTML, error=None, success=success_msg)
+
+@flask_app.route("/")
+def home():
+    return "Premium Bot API is running."
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000, debug=False)
